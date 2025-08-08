@@ -3,39 +3,48 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <title>Anemone Reef — GB Prototype B</title>
+  <title>Anemone Reef — GB Prototype D (Stable)</title>
   <style>
     :root{
       --gb0:#0f380f; /* darkest */
       --gb1:#2a582a; /* dark */
       --gb2:#7fa50f; /* light */
       --gb3:#9bbc0f; /* lightest */
-      --ink:#0f380f; --paper:#e0f4a0;
     }
-    html, body { height: 100%; margin: 0; background:#0b120a; color:var(--gb3); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    #wrap { position: fixed; inset: 0; display:grid; place-items:center; }
-    canvas { image-rendering: pixelated; image-rendering: crisp-edges; background:#0a140a; box-shadow: 0 8px 40px rgba(0,0,0,0.6), inset 0 0 0 8px #0b1609, inset 0 0 0 12px #132310; border-radius: 16px; touch-action:none; }
-    #overlay { position: fixed; inset: 0; display:grid; place-items:center; pointer-events:none; }
+    html, body { height:100%; margin:0; background:#0b120a; color:var(--gb3);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; overscroll-behavior:none; }
+    #wrap { position:fixed; inset:0; display:grid; place-items:center; z-index:3; }
+    #game { image-rendering:pixelated; image-rendering:crisp-edges; background:#0a140a;
+      box-shadow:0 8px 40px rgba(0,0,0,0.6), inset 0 0 0 8px #0b1609, inset 0 0 0 12px #132310;
+      border-radius:16px; touch-action:none; }
+    #overlay { position:fixed; inset:0; display:grid; place-items:center; pointer-events:auto; z-index:5; }
+    .hidden{ display:none !important; }
     .card { pointer-events:auto; background:#102112; color:var(--gb3); border:2px solid var(--gb1); border-radius:12px; padding:14px 16px; width:min(92vw,520px); box-shadow:0 10px 30px rgba(0,0,0,0.5); }
-    .row { display:flex; gap:12px; align-items:center; justify-content: space-between; }
-    .btn { pointer-events:auto; appearance:none; border:2px solid var(--gb2); background:var(--gb1); color:#f3ffd5; border-radius:10px; padding:10px 14px; font-weight:700; cursor:pointer; }
+    .row { display:flex; gap:12px; align-items:center; justify-content:space-between; }
+    .btn { appearance:none; border:2px solid var(--gb2); background:var(--gb1); color:#f3ffd5; border-radius:10px; padding:10px 14px; font-weight:700; cursor:pointer; }
     .btn:active{ filter:brightness(0.9); }
     .small { color:var(--gb2); font-size:12px; opacity:0.85; }
-    a { color:var(--gb2); text-decoration:none; border-bottom:1px dotted var(--gb2); }
 
     /* Mobile HUD */
-    #mobileHud { position: fixed; left:0; right:0; bottom:0; display:none; padding:10px; gap:8px; justify-content:space-between; align-items:center; pointer-events:none; }
+    #mobileHud { position:fixed; left:0; right:0; bottom:0; display:none; padding:10px; gap:8px; justify-content:space-between; align-items:center; pointer-events:none; z-index:6; }
     #mobileHud .mBtn { pointer-events:auto; background:var(--gb1); color:#f3ffd5; border:2px solid var(--gb2); border-radius:12px; padding:10px 14px; min-width:74px; text-align:center; font-weight:800; }
-    #toast { position: fixed; left:50%; transform:translateX(-50%); bottom:82px; background:#0c1c0e; color:var(--gb3); border:2px solid var(--gb1); border-radius:10px; padding:6px 10px; font-size:12px; display:none; }
+    #toast { position:fixed; left:50%; transform:translateX(-50%); bottom:82px; background:#0c1c0e; color:var(--gb3); border:2px solid var(--gb1); border-radius:10px; padding:6px 10px; font-size:12px; display:none; z-index:7; }
+
+    /* Pulse ring */
+    #pulseRing { position:fixed; inset:0; pointer-events:none; z-index:4; background:transparent !important; box-shadow:none !important; border-radius:0 !important; }
   </style>
 </head>
 <body>
   <div id="wrap"><canvas id="game"></canvas></div>
   <div id="overlay"></div>
+  <canvas id="pulseRing"></canvas>
   <div id="mobileHud">
     <div class="mBtn" id="mSpawn">Spawn</div>
+    <div class="mBtn" id="mPulse">Pulse</div>
     <div class="mBtn" id="mSwitch">Switch</div>
     <div class="mBtn" id="mAmb">Amb</div>
+    <div class="mBtn" id="mMusic">Music</div>
     <div class="mBtn" id="mHelp">Help</div>
     <div class="mBtn" id="mPause">Pause</div>
   </div>
@@ -45,49 +54,51 @@
 'use strict';
 
 /************************************
- *  ANEMONE REEF — GAME BOY PROTOTYPE B
- *  Enhancements: visuals, touch/mobile, audio, sim depth, save
- *  Single-file, Canvas2D, no deps
+ *  ANEMONE REEF — GAME BOY PROTOTYPE D (Stable)
  ************************************/
 
 // --- Config ---
-const GB = { W:160, H:144 }; // native Game Boy resolution
-let BASE_W = GB.W, BASE_H = GB.H; // can scale up via hotkeys 1/2/3
+const GB = { W:160, H:144 };
+let BASE_W = GB.W, BASE_H = GB.H;
 const IS_TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints>0);
+const SETTINGS = { npcEff: 0.10, npcArms: 1, npcOpenMin: 0.6, npcOpenMax: 1.0, npcRestMin: 4.5, npcRestMax: 7.5, npcReachScale: 0.40 };
 
-const PALETTE = {
-  0: '#0f380f', 1: '#2a582a', 2: '#7fa50f', 3: '#9bbc0f'
-};
-const COLORS = [PALETTE[0], PALETTE[1], PALETTE[2], PALETTE[3]];
+// day-night
+const DAY = { period: 240 };
+const dayPhase = (time)=> (time % DAY.period) / DAY.period;
+const isNight = (time)=>{ const p = dayPhase(time); return (p>0.7 || p<0.2); };
+
+const COLORS = ['#0f380f','#2a582a','#7fa50f','#9bbc0f'];
 
 // Controls
-const KEYS = {}; // keyboard map
-let MOUSE = { x:0, y:0, down:false, clicked:false };
+const KEYS = {}; let MOUSE = { x:0, y:0, down:false, clicked:false };
 
 // Canvas setup (offscreen low-res -> upscale to fit)
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const off = document.createElement('canvas');
 let octx = off.getContext('2d');
-let scale = 4; // runtime-computed
+let scale = 4;
+const pulseCanvas = document.getElementById('pulseRing');
+const prctx = pulseCanvas.getContext('2d');
 
-function fit() {
-  const pad = 24; // visual breathing room
+function fitPulse(){ pulseCanvas.width = canvas.width; pulseCanvas.height = canvas.height; }
+function fit(){
+  const pad = 24;
   const ww = window.innerWidth - pad*2;
   const wh = window.innerHeight - pad*2;
-  // keep aspect GB.W:GB.H
   const s = Math.floor(Math.min(ww/BASE_W, wh/BASE_H));
   scale = Math.max(2, s);
-  canvas.width = BASE_W * scale;
-  canvas.height = BASE_H * scale;
-  off.width = BASE_W;
-  off.height = BASE_H;
-  octx = off.getContext('2d');
-  octx.imageSmoothingEnabled = false;
-  ctx.imageSmoothingEnabled = false;
+  canvas.width = BASE_W * scale; canvas.height = BASE_H * scale;
+  off.width = BASE_W; off.height = BASE_H; octx = off.getContext('2d');
+  octx.imageSmoothingEnabled = false; ctx.imageSmoothingEnabled = false; fitPulse();
 }
-window.addEventListener('resize', fit);
-fit();
+window.addEventListener('resize', fit); fit();
+
+// Prevent iOS selection/callout & context menus
+['contextmenu','selectstart','gesturestart'].forEach(type=>{
+  document.addEventListener(type, e=>{ e.preventDefault(); }, {passive:false});
+});
 
 // Input
 canvas.addEventListener('mousemove', (e)=>{
@@ -95,347 +106,292 @@ canvas.addEventListener('mousemove', (e)=>{
   MOUSE.x = Math.floor((e.clientX - rect.left)/scale);
   MOUSE.y = Math.floor((e.clientY - rect.top)/scale);
 });
-canvas.addEventListener('mousedown', ()=>{ MOUSE.down = true; MOUSE.clicked = true; userInteract(); });
+canvas.addEventListener('mousedown', (e)=>{ if(e.button===2 && WORLD.aim.active){ cancelAim(); return; } MOUSE.down = true; MOUSE.clicked = true; userInteract(); if(WORLD.aim.active){ updateAimFromPointer(); } });
 window.addEventListener('mouseup', ()=>{ MOUSE.down = false; });
-window.addEventListener('keydown', (e)=>{ KEYS[e.key.toLowerCase()] = true; userInteract(); /* prevent page scroll for arrows/space */ if([' ','arrowup','arrowdown','arrowleft','arrowright'].includes(e.key.toLowerCase())) e.preventDefault(); });
+window.addEventListener('keydown', (e)=>{ const k=e.key.toLowerCase(); KEYS[k]=true; userInteract(); if([' ','arrowup','arrowdown','arrowleft','arrowright'].includes(k)) e.preventDefault(); });
 window.addEventListener('keyup', (e)=>{ KEYS[e.key.toLowerCase()] = false; });
 
 // Touch -> mouse emulation
 if(IS_TOUCH){
-  canvas.addEventListener('touchstart', (e)=>{
-    const t = e.changedTouches[0];
-    const rect = canvas.getBoundingClientRect();
-    MOUSE.x = Math.floor((t.clientX - rect.left)/scale);
-    MOUSE.y = Math.floor((t.clientY - rect.top)/scale);
-    MOUSE.down = true; MOUSE.clicked = true; userInteract();
-  }, {passive:false});
-  canvas.addEventListener('touchmove', (e)=>{
-    const t = e.changedTouches[0];
-    const rect = canvas.getBoundingClientRect();
-    MOUSE.x = Math.floor((t.clientX - rect.left)/scale);
-    MOUSE.y = Math.floor((t.clientY - rect.top)/scale);
-    e.preventDefault();
-  }, {passive:false});
-  canvas.addEventListener('touchend', ()=>{ MOUSE.down = false; });
+  const toLocal=(t)=>{ const r=canvas.getBoundingClientRect(); MOUSE.x=Math.floor((t.clientX-r.left)/scale); MOUSE.y=Math.floor((t.clientY-r.top)/scale); };
+  canvas.addEventListener('touchstart',(e)=>{ const t=e.changedTouches[0]; toLocal(t); MOUSE.down=true; MOUSE.clicked=true; userInteract(); if(WORLD.aim.active){ updateAimFromPointer(); } e.preventDefault(); },{passive:false});
+  canvas.addEventListener('touchmove',(e)=>{ const t=e.changedTouches[0]; toLocal(t); if(WORLD.aim.active){ updateAimFromPointer(); } e.preventDefault(); },{passive:false});
+  canvas.addEventListener('touchend',(e)=>{ MOUSE.down=false; if(WORLD.aim.active){ toast('Tap Spawn to cast'); } e.preventDefault(); },{passive:false});
+  canvas.addEventListener('touchcancel',(e)=>{ MOUSE.down=false; e.preventDefault(); },{passive:false});
 }
 
-// Overlay UI (HTML) for instructions / start
+// Overlay UI
 const overlay = document.getElementById('overlay');
 function showStartCard(){
+  overlay.classList.remove('hidden');
   overlay.innerHTML = `
   <div class="card">
-    <div style="font-weight:900; font-size:18px; letter-spacing:0.3px; margin-bottom:4px;">ANEMONE REEF — Game Boy Prototype B</div>
-    <div class="small" style="margin-bottom:10px;">Side‑view tidal reef. You are a colony of sea anemones. Feed from currents, time your tentacles, broadcast spawn to settle new polyps. As you thrive, life returns.</div>
+    <div style="font-weight:900; font-size:18px; letter-spacing:0.3px; margin-bottom:4px;">ANEMONE REEF — Game Boy Prototype D</div>
+    <div class="small" style="margin-bottom:10px;">Side‑view tidal reef. Feed with a fan of tentacles, aim & cast spores to colonize rock, and use a current pulse to steer. Nights bring bigger drifters; starfish graze as the reef grows. iOS touch supported. <b>Press D</b> to toggle debug logs.</div>
     <div style="display:grid; gap:6px; margin:10px 0 8px;">
-      <div>• <b>Click & hold / Touch & hold</b>: extend tentacles on focused anemone</div>
-      <div>• <b>Mouse/Touch</b>: aim tentacles</div>
-      <div>• <b>Tab</b> or <b>Switch</b>: cycle focus &nbsp;•&nbsp; <b>S</b> or <b>Spawn</b>: spores</div>
-      <div>• <b>H</b>/<b>Help</b> overlay • <b>M</b>/<b>Amb</b> ambience • <b>P</b>/<b>Pause</b> pause</div>
+      <div>• <b>Hold click / touch</b>: extend tentacles on the focused anemone (aim with pointer)</div>
+      <div>• <b>S / Spawn</b>: enter <b>Aim</b> (angle/power), press again to <b>Cast</b></div>
+      <div>• <b>E / Pulse</b>: push nearby spores/food (short cooldown)</div>
+      <div>• <b>Tab / Switch</b>: cycle anemone • <b>M</b>: surf ambience • <b>N</b>: music</div>
       <div>• <b>1/2/3</b>: internal resolution scale (GB → larger)</div>
     </div>
     <div class="row" style="margin-top:8px;">
       <button id="startBtn" class="btn">Start</button>
-      <div class="small">Prototype B — single file. Best in Chrome/Safari.</div>
+      <div class="small">Prototype D · Chrome/Safari recommended</div>
     </div>
   </div>`;
-  document.getElementById('startBtn').onclick = ()=>{ overlay.innerHTML=''; startGame(); };
+  overlay.style.pointerEvents='auto';
+  document.getElementById('startBtn').onclick=()=>{ overlay.innerHTML=''; overlay.style.pointerEvents='none'; overlay.classList.add('hidden'); startGame(); };
 }
 showStartCard();
 
 /********* WORLD SIM *********/
+let t=0, dt=1/60, paused=false, frameId=0, lastIsNight=isNight(0), lastQuarter=-1, lastPulseCd=0;
+const TIDE = { mean: 86, amp:28, period:70 };
+const waterline = (time)=> TIDE.mean + TIDE.amp * Math.sin((time/TIDE.period)*Math.PI*2);
 
-// Time
-let t = 0; // seconds
-let dt = 1/60; // fixed timestep
-let paused = false;
-let frameId = 0;
-
-// Tide settings (slightly slower, broader range)
-const TIDE = { mean: 86, amp: 28, period: 110 };
-function waterline(time){ return TIDE.mean + TIDE.amp * Math.sin((time / TIDE.period) * Math.PI * 2); }
-
-// Background: static rock map + sand
-const MAP = { W: GB.W, H: GB.H, rock: new Uint8Array(GB.W*GB.H), seed: (parseFloat(localStorage.getItem('reef_seed'))|| (Math.random()*1000)) };
-
-function seededRng(seed){ let x = (seed*1e6)|0 || 123456789; return ()=>{ x^=x<<13; x^=x>>>17; x^=x<<5; return (x>>>0)/4294967296; }; }
-
-function makeRockMap(){
-  const rnd = seededRng(MAP.seed);
-  function n2(x,y){ return 0.5+0.5*( Math.sin(x*0.09 + Math.cos(y*0.05)) * 0.6 + Math.sin(y*0.07 + Math.cos(x*0.08)) * 0.4 ); }
-  for(let y=0;y<MAP.H;y++){
-    for(let x=0;x<MAP.W;x++){
-      const i = y*MAP.W + x;
-      const floor = 0.74 + 0.1*n2(x*0.45,y*0.55);
-      const base = y/MAP.H;
-      const r = n2(x+30,y+10)*0.63 + base*0.62;
-      MAP.rock[i] = (base>floor || r>0.79) ? 1 : 0; // more micro‑ledges
-    }
-  }
-}
+const MAP = { W:GB.W, H:GB.H, rock:new Uint8Array(GB.W*GB.H), seed:(parseFloat(localStorage.getItem('reef_seed')) || (Math.random()*1000)) };
+const idx=(x,y)=> y*MAP.W+x; const clamp01=(v)=> v<0?0:v>1?1:v;
+function seededRng(seed){ let x=(seed*1e6)|0 || 123456789; return ()=>{ x^=x<<13; x^=x>>>17; x^=x<<5; return (x>>>0)/4294967296; }; }
+function makeRockMap(){ const rnd=seededRng(MAP.seed); function n2(x,y){ return 0.5+0.5*( Math.sin(x*0.09 + Math.cos(y*0.05)) * 0.6 + Math.sin(y*0.07 + Math.cos(x*0.08)) * 0.4 ); }
+  for(let y=0;y<MAP.H;y++){ for(let x=0;x<MAP.W;x++){ const floor = 0.74 + 0.1*n2(x*0.45,y*0.55); const base=y/MAP.H; const r=n2(x+30,y+10)*0.63 + base*0.62; MAP.rock[idx(x,y)] = (base>floor || r>0.79)?1:0; } } }
 makeRockMap();
+const isRock=(x,y)=>{ x|=0; y|=0; if(x<0||y<0||x>=MAP.W||y>=MAP.H) return 0; return MAP.rock[idx(x,y)]; };
 
-function isRock(x,y){ x|=0; y|=0; if(x<0||y<0||x>=MAP.W||y>=MAP.H) return 0; return MAP.rock[y*MAP.W + x]; }
+/********* SITE QUALITY *********/
+const SITE = { Q:new Float32Array(MAP.W*MAP.H) };
+function buildSiteQuality(){ const S=10; for(let y=0;y<MAP.H;y++){ for(let x=0;x<MAP.W;x++){ if(!isRock(x,y)){ SITE.Q[idx(x,y)]=0; continue; } let flowSum=0, sub=0; for(let s=0;s<S;s++){ const tt=(s/S)*TIDE.period; const f=flowAt(x,y, tt*0.5); const m=Math.hypot(f.vx,f.vy); flowSum+=m; const wl=waterline(tt); if(y>wl-1) sub++; }
+  const mAvg=flowSum/S; const flowScore=Math.exp(-Math.pow((mAvg-0.12)/0.1,2)); const subFrac=sub/S; const subScore=clamp01(1 - Math.abs(subFrac-0.7)/0.6); let neigh=0; if(isRock(x+1,y))neigh++; if(isRock(x-1,y))neigh++; if(isRock(x,y+1))neigh++; if(isRock(x,y-1))neigh++; const shelter=(neigh>=3)?1:(neigh===2?0.6:0.3); SITE.Q[idx(x,y)] = clamp01(0.5*flowScore + 0.35*subScore + 0.15*shelter); } } }
+buildSiteQuality();
+const siteQ=(x,y)=>{ x|=0; y|=0; if(x<0||y<0||x>=MAP.W||y>=MAP.H) return 0; return SITE.Q[idx(x,y)]||0; };
 
-// Flow field (divergence‑free curl of scalar field) — slightly richer
+// Flow field
 function scalarNoise(x,y,t){ return Math.sin((x*0.07) + Math.sin(y*0.05 + t*0.6)) + Math.cos((y*0.09) + Math.cos(x*0.04 - t*0.5)); }
+function scalarNoise2(x,y,t){ return Math.sin(x*0.03 + t*0.15) + Math.cos(y*0.025 - t*0.12) + Math.sin((x*0.013 + y*0.02) + t*0.08); }
 function flowAt(x,y,time){
-  const eps = 0.6;
-  const n1 = scalarNoise(x+eps, y, time) - scalarNoise(x-eps, y, time);
-  const n2 = scalarNoise(x, y+eps, time) - scalarNoise(x, y-eps, time);
-  let vx =  n2 * 0.38; // + d/dy n
-  let vy = -n1 * 0.38; // - d/dx n
-  // tide surge & backwash
-  const tidePhase = Math.sin((time / TIDE.period) * Math.PI * 2);
-  vy += 0.06 * tidePhase;
-  // boundary drag near rock
-  if(isRock(x,y) || isRock(x, y+1)) { vx*=0.12; vy*=0.12; }
+  // Layer 1: medium eddies (curl of scalarNoise)
+  const eps=0.8;
+  const n1=scalarNoise(x+eps,y,time*0.8) - scalarNoise(x-eps,y,time*0.8);
+  const n2=scalarNoise(x,y+eps,time*0.8) - scalarNoise(x,y-eps,time*0.8);
+  let vx =  n2*0.35; let vy = -n1*0.35;
+  // Layer 2: large eddies (slower, broader)
+  const eps2=2.2;
+  const s1=scalarNoise2(x+eps2,y,time*0.35) - scalarNoise2(x-eps2,y,time*0.35);
+  const s2=scalarNoise2(x,y+eps2,time*0.35) - scalarNoise2(x,y-eps2,time*0.35);
+  vx += s2*0.20; vy += -s1*0.20;
+  // Vertical shear: surface to the right, bottom to the left
+  const depth = y/MAP.H; vx += (depth-0.5)*0.16;
+  // Tide (macro vertical)
+  const tidePhase = Math.sin((time/TIDE.period)*Math.PI*2); vy += 0.045*tidePhase;
+  // Gentle global meander
+  vx += 0.03*Math.sin(time*0.27); vy += 0.02*Math.cos(time*0.21);
+  // Damping near rock
+  if(isRock(x,y) || isRock(x,y+1)){ vx*=0.12; vy*=0.12; }
+  if(isNight(time)){ vx*=0.92; vy*=0.92; }
   return {vx,vy};
 }
 
 // Entities
-class Plankton {
-  constructor(x,y,kind='micro'){
-    this.x=x; this.y=y; this.vx=0; this.vy=0; this.caught=false; this.age=0; this.kind=kind; this.energy=(kind==='micro'?1:1.8);
-  }
-  update(dt,time){
-    if(this.caught){ this.energy -= dt*0.7; return; }
-    const f = flowAt(this.x, this.y, time*0.4);
-    const jig = (this.kind==='micro'? 0.05:0.025);
-    this.vx += f.vx*0.52 + (Math.random()-0.5)*jig;
-    this.vy += f.vy*0.52 + (Math.random()-0.5)*jig;
-    this.vx *= 0.94; this.vy *= 0.94;
-    this.x += this.vx; this.y += this.vy; this.age += dt;
-    if(this.x< -2 || this.x>MAP.W+2 || this.y>MAP.H+2){ this.reset(); }
-  }
-  reset(){
-    const side = Math.random();
-    if(side<0.45){ this.x=-1; this.y=Math.random()*MAP.H; }
-    else if(side<0.9){ this.x=MAP.W+1; this.y=Math.random()*MAP.H; }
-    else { this.x=Math.random()*MAP.W; this.y=MAP.H-1; }
-    this.vx=0; this.vy=0; this.caught=false; this.energy=(this.kind==='micro'?1:1.8); this.age=0;
-  }
-  draw(g){
-    const c = (this.kind==='micro')? COLORS[2]: COLORS[3];
-    g.fillStyle = c; g.fillRect(this.x|0, this.y|0, 1,1);
-    if(this.kind==='macro' && ((this.age*10|0)%2===0)) g.fillRect((this.x|0)+1, this.y|0, 1,1);
-  }
+class Plankton{
+  constructor(x,y,kind='micro'){ this.x=x; this.y=y; this.vx=0; this.vy=0; this.caught=false; this.age=0; this.kind=kind; this.energy=(kind==='micro'?1:1.8); this.layer=Math.random(); }
+  update(dt,time){ if(this.caught){ this.energy-=dt*0.7; return; } const f=flowAt(this.x,this.y,time*0.4); const jig=(this.kind==='micro'?0.05:0.025); const k=0.35+0.45*this.layer; const jx=(Math.random()-0.5)*jig*(0.6+this.layer); const jy=(Math.random()-0.5)*jig*(1.1-this.layer*0.6); this.vx += (f.vx*k - this.vx)*0.06 + jx; this.vy += (f.vy*k - this.vy)*0.06 + jy; const nightBoost=isNight(time)?1.06:1.0; this.vy += (this.kind==='micro'?0.030:0.018); this.vx*=0.985*nightBoost; this.vy*=0.985*nightBoost; this.x+=this.vx; this.y+=this.vy; this.age+=dt; if(this.x<-2||this.x>MAP.W+2||this.y>MAP.H+2||this.y<-2){ this.reset(); } }
+  reset(){ const side=Math.random(); if(side<0.3){ this.x=-1; this.y=Math.random()*MAP.H; } else if(side<0.6){ this.x=MAP.W+1; this.y=Math.random()*MAP.H; } else if(side<0.85){ this.x=Math.random()*MAP.W; this.y=MAP.H-1; } else { this.x=Math.random()*MAP.W; this.y=-1; } this.vx=(Math.random()-0.5)*0.2; this.vy=0.05+Math.random()*0.2; this.caught=false; this.energy=(this.kind==='micro'?1:1.8); this.age=0; this.layer=Math.random(); }
+  draw(g){ if(this.caught) return; const c=(this.kind==='micro')?COLORS[2]:COLORS[3]; g.fillStyle=c; g.fillRect(this.x|0,this.y|0,1,1); if(this.kind==='macro' && ((this.age*10|0)%2===0)) g.fillRect((this.x|0)+1,this.y|0,1,1); }
 }
 
-class Spore { constructor(x,y){ this.x=x; this.y=y; this.vx=0; this.vy=0; this.age=0; this.settled=false; this.fail=false; }
-  update(dt,time){ if(this.settled||this.fail) return; const f = flowAt(this.x,this.y,time*0.5); this.vx += f.vx*0.4 + (Math.random()-0.5)*0.03; this.vy += f.vy*0.4 + (Math.random()-0.5)*0.03; this.vx*=0.95; this.vy*=0.95; this.x+=this.vx; this.y+=this.vy; this.age+=dt; const wl = waterline(time); const goodDepth = this.y>wl-12 && this.y<wl+44; if(goodDepth && isRock(this.x|0, this.y|0)){ this.settled=true; return; } if(this.x<1||this.x>MAP.W-2||this.y<1||this.y>MAP.H-2||this.age>30){ this.fail=true; } }
-  draw(g){ const c = this.settled? COLORS[2] : (this.fail? COLORS[1] : COLORS[3]); g.fillStyle = c; g.fillRect(this.x|0, this.y|0, 1,1); }
+class Spore{ constructor(x,y){ this.x=x; this.y=y; this.vx=0; this.vy=0; this.age=0; this.settled=false; this.fail=false; }
+  update(dt,time){ if(this.settled||this.fail) return; const f=flowAt(this.x,this.y,time*0.5); this.vx += f.vx*0.4 + (Math.random()-0.5)*0.03; this.vy += f.vy*0.4 + (Math.random()-0.5)*0.03; this.vx*=0.95; this.vy*=0.95; this.x+=this.vx; this.y+=this.vy; this.age+=dt; const wl=waterline(time); const goodDepth=this.y>wl-12 && this.y<wl+44; if(goodDepth && isRock(this.x|0,this.y|0)){ this.settled=true; return; } if(this.x<1||this.x>MAP.W-2||this.y<1||this.y>MAP.H-2||this.age>30){ this.fail=true; } }
+  draw(g){ const x=this.x|0,y=this.y|0; if(this.settled){ g.fillStyle=COLORS[2]; g.fillRect(x,y,1,1); g.fillRect(x+1,y,1,1); } else if(this.fail){ g.fillStyle=COLORS[1]; g.fillRect(x,y,1,1); } else { g.fillStyle=COLORS[3]; g.fillRect(x,y,1,1); if(((this.age*18)|0)%2===0){ g.fillStyle=COLORS[2]; g.fillRect(x+1,y,1,1); g.fillRect(x-1,y,1,1); g.fillRect(x,y+1,1,1); g.fillRect(x,y-1,1,1); } } }
 }
 
-class Detritus { // bonus energy chunks dropped later
-  constructor(x,y){ this.x=x; this.y=y; this.age=0; }
-  update(dt,time){ this.age+=dt; const f = flowAt(this.x,this.y,time*0.3); this.x += f.vx*0.8; this.y += f.vy*0.8; if(this.x<0||this.x>MAP.W||this.y>MAP.H) this.age=999; }
-  draw(g){ g.fillStyle = COLORS[1]; g.fillRect(this.x|0,this.y|0,1,1); }
+class Detritus{ constructor(x,y){ this.x=x; this.y=y; this.age=0; }
+  update(dt,time){ this.age+=dt; const f=flowAt(this.x,this.y,time*0.3); this.x+=f.vx*0.8; this.y+=f.vy*0.8; if(this.x<0||this.x>MAP.W||this.y>MAP.H) this.age=999; }
+  draw(g){ g.fillStyle=COLORS[1]; g.fillRect(this.x|0,this.y|0,1,1); }
 }
 
-class Anemone {
-  constructor(x,y){
-    this.x=x; this.y=y; this.energy=4.5; this.alive=true; this.age=0; this.focus=false;
-    // species flavor: long or stubby
-    this.spec = (Math.random()<0.5? 'long':'stub');
-    this.tent = {len: (this.spec==='long'? 7:5), angle: -Math.PI/2, extend:0, cooldown:0};
-    this.spawnCooldown=0; // seconds
-  }
-  update(dt,time){ if(!this.alive) return; this.age += dt;
-    // passive feeding near mouth
-    const mouthR = 3;
-    for(const p of WORLD.plankton){ if(!p.caught){ const dx = p.x - this.x, dy = p.y - this.y; if(dx*dx+dy*dy < mouthR*mouthR){ p.caught=true; this.energy += (p.kind==='micro'? 0.22: 0.45); } } }
+class Anemone{
+  constructor(x,y){ this.x=x; this.y=y; this.energy=4.5; this.alive=true; this.hibernating=false; this.lowTimer=0; this.age=0; this.focus=false; this.spec=(Math.random()<0.5?'long':'fan'); this.arms=(this.spec==='fan'?7:5); this.tent={angle:-Math.PI/2, extend:0}; this.spawnCooldown=0; this.ai={open:false, t:1+Math.random()*2}; }
+  update(dt,time){ if(!this.alive) return; this.age+=dt; const q=siteQ(this.x|0,this.y|0);
+    // Mouth capture
+    const mouthR=5; for(const p of WORLD.plankton){ if(!p.caught){ const dx=p.x-this.x, dy=p.y-this.y; if(dx*dx+dy*dy < mouthR*mouthR){ p.caught=true; this.energy += (p.kind==='micro'?0.28:0.54)*(0.8+0.4*q); WORLD.fx.push(flash(this.x,this.y)); WORLD.fx.push(plus(this.x,this.y)); } } }
+    // Detritus nibble
+    for(const d of WORLD.detritus){ const dx=d.x-this.x, dy=d.y-this.y; if(dx*dx+dy*dy<6){ d.age=999; this.energy+=0.2; WORLD.fx.push(flash(this.x,this.y)); } }
 
-    // absorb detritus
-    for(const d of WORLD.detritus){ const dx=d.x-this.x, dy=d.y-this.y; if(dx*dx+dy*dy<6){ d.age=999; this.energy += 0.2; } }
+    // NPC duty-cycle sweeps (fixed braces)
+    if(!this.focus && !this.hibernating){
+      this.ai.t -= dt;
+      if(this.ai.open){
+        if(this.energy<0.9){ this.ai.open=false; this.ai.t = SETTINGS.npcRestMin + Math.random()*(SETTINGS.npcRestMax-SETTINGS.npcRestMin); }
+        const cost = 0.18*dt;
+        if(this.energy>cost){ this.energy -= cost; this.tent.extend = Math.min(0.75, this.tent.extend + dt*1.0); }
+        else { this.ai.open=false; this.ai.t = SETTINGS.npcRestMin + Math.random()*(SETTINGS.npcRestMax-SETTINGS.npcRestMin); }
+        if(this.ai.t<=0){ this.ai.open=false; this.ai.t = SETTINGS.npcRestMin + Math.random()*(SETTINGS.npcRestMax-SETTINGS.npcRestMin); }
+      } else {
+        this.tent.extend = Math.max(0, this.tent.extend - dt*1.4);
+        if(this.ai.t<=0){
+          let target=null, dmin=26*26;
+          for(const p of WORLD.plankton){ if(!p.caught){ const dx=p.x-this.x, dy=p.y-this.y; const d2=dx*dx+dy*dy; if(d2<dmin){ dmin=d2; target=p; } } }
+          if(target && Math.random()<0.55 && this.energy>1.4){
+            this.ai.open=true;
+            this.ai.t = SETTINGS.npcOpenMin + Math.random()*(SETTINGS.npcOpenMax-SETTINGS.npcOpenMin);
+            this.tent.angle = Math.atan2(target.y-this.y, target.x-this.x);
+          } else {
+            this.ai.t = SETTINGS.npcRestMin + Math.random()*(SETTINGS.npcRestMax-SETTINGS.npcRestMin);
+          }
+        }
+      }
+    }
 
-    // active tentacle control (focus only)
-    if(this.focus){ const dx = (MOUSE.x - this.x); const dy = (MOUSE.y - this.y); this.tent.angle = Math.atan2(dy,dx); if(MOUSE.down){ const cost = 0.7*dt; if(this.energy>cost){ this.energy -= cost; this.tent.extend = Math.min(1, this.tent.extend + dt* (this.spec==='long'? 1.9:2.2)); } } else { this.tent.extend = Math.max(0, this.tent.extend - dt*1.25); } } else { this.tent.extend *= 0.985; }
+    // Player control
+    if(this.focus && !this.hibernating){
+      const dx=(MOUSE.x-this.x), dy=(MOUSE.y-this.y); this.tent.angle=Math.atan2(dy,dx);
+      if(MOUSE.down && !WORLD.aim.active){ const cost=0.85*dt; if(this.energy>cost){ this.energy-=cost; this.tent.extend=Math.min(1, this.tent.extend + dt*(this.spec==='long'?1.9:2.2)); } }
+      else { this.tent.extend=Math.max(0, this.tent.extend - dt*1.25); }
+    }
 
-    // tentacle capture sweep
-    if(this.tent.extend>0){ const L = (8 + this.tent.extend* (this.spec==='long'? 20:14)); const a = this.tent.angle; const tipx = this.x + Math.cos(a)*L; const tipy = this.y + Math.sin(a)*L; for(const p of WORLD.plankton){ if(!p.caught){ const dx = p.x - tipx, dy = p.y - tipy; if(dx*dx+dy*dy < 7){ p.caught=true; this.energy += (p.kind==='micro'?0.24:0.5); } } } }
+    // Tentacle capture sweep
+    if(this.tent.extend>0 && !this.hibernating){ const arms=this.focus?this.arms:SETTINGS.npcArms; const spread=(this.spec==='fan'?Math.PI/3:Math.PI/5); const eff=this.focus?1.0:SETTINGS.npcEff; for(let k=0;k<arms;k++){ const frac=(k/(arms-1))-0.5; const a=this.tent.angle + frac*spread; const L=(8 + this.tent.extend*(this.spec==='long'?20:14))*(this.focus?1.0:SETTINGS.npcReachScale); sweepCapture(this.x,this.y,a,L,(gain)=>{ this.energy += gain*eff; }); } }
 
-    // digest caught plankton
+    // Digest caught plankton
     for(const p of WORLD.plankton){ if(p.caught){ p.energy -= dt; if(p.energy<=0){ p.reset(); } } }
 
-    // emersion penalty
-    const wl = waterline(time);
-    const submerged = this.y > wl-1; if(!submerged){ this.energy -= dt*0.16; }
-    if(this.energy<=0){ this.alive=false; this.energy=0; }
+    // Emersion / passive
+    const wl=waterline(time); const submerged=this.y>wl-1; if(!submerged){ this.energy -= dt*0.16*(1.2-0.6*q); } if(submerged) this.energy += dt*0.055*(0.6+0.8*q); this.energy=Math.min(this.energy,12);
 
-    // slow natural gain when submerged
-    if(submerged) this.energy += dt*0.055; this.energy = Math.min(this.energy, 12);
+    // Hibernate
+    if(this.energy<0.6) this.lowTimer+=dt; else this.lowTimer=0; if(!this.hibernating && this.lowTimer>12 && q<0.4){ this.hibernating=true; toast('A colony hibernates'); }
+    if(this.hibernating){ this.tent.extend=Math.max(0, this.tent.extend - dt*1.6); if(submerged && q>0.45) this.energy+=dt*0.03; if(this.energy>1.2 && q>0.45){ this.hibernating=false; this.lowTimer=0; toast('A colony awakens'); } }
 
     if(this.spawnCooldown>0) this.spawnCooldown -= dt;
   }
-  trySpawn(){ if(this.spawnCooldown>0) return 0; if(this.energy<6) return 0; const n = 12 + Math.floor((this.energy-6)*4); this.energy -= 4; this.spawnCooldown = 10; for(let i=0;i<n;i++){ const ang = Math.random()*Math.PI*2; const r = 2 + Math.random()*4; const s = new Spore(this.x + Math.cos(ang)*r, this.y + Math.sin(ang)*r); WORLD.spores.push(s);} return n; }
-  draw(g,time){
-    const wl = waterline(time);
-    const submerged = this.y > wl-1;
-    const colBody = submerged ? COLORS[1] : COLORS[0];
-    // body shading
-    g.fillStyle = colBody; g.fillRect((this.x-1)|0, (this.y-1)|0, 3, 2);
-    g.fillStyle = COLORS[2]; g.fillRect((this.x-1)|0, (this.y-2)|0, 3, 1);
-    // tentacle
-    if(this.tent.extend>0){ const L = (8 + this.tent.extend* (this.spec==='long'? 20:14)); const a = this.tent.angle; const steps = Math.max(6, (L|0)); g.fillStyle = COLORS[3]; let px = this.x, py=this.y-1; for(let i=1;i<=steps;i++){ const f = i/steps; const tx = this.x + Math.cos(a)*L*f + Math.sin(a*2+f*4)*0.3; const ty = this.y + Math.sin(a)*L*f + Math.cos(a*2+f*3)*0.3; const ix = tx|0, iy = ty|0; g.fillRect(ix, iy, 1,1); if(i%5===0){ g.fillRect(ix+1, iy, 1,1); } px=tx; py=ty; } }
-    // focus marker + tiny energy bar
-    if(this.focus){ g.fillStyle = COLORS[3]; g.fillRect((this.x-2)|0,(this.y-4)|0,5,1); g.fillRect((this.x-2)|0,(this.y+1)|0,5,1); const w = Math.min(12, Math.floor(this.energy)); g.fillStyle = COLORS[2]; g.fillRect((this.x-6)|0,(this.y-6)|0, w,1); g.fillStyle = COLORS[0]; g.fillRect((this.x-6+w)|0,(this.y-6)|0, Math.max(0,12-w),1); }
+  draw(g,time){ const wl=waterline(time); const submerged=this.y>wl-1; const colBody=this.hibernating?COLORS[0]:(submerged?COLORS[1]:COLORS[0]); g.fillStyle=COLORS[0]; g.fillRect((this.x-2)|0,(this.y-3)|0,5,4); g.fillStyle=colBody; g.fillRect((this.x-1)|0,(this.y-2)|0,3,2); g.fillStyle=this.hibernating?COLORS[1]:COLORS[2]; g.fillRect((this.x-1)|0,(this.y-3)|0,3,1);
+    if(this.tent.extend>0 && !this.hibernating){ const arms=this.focus?this.arms:SETTINGS.npcArms; const spread=(this.spec==='fan'?Math.PI/3:Math.PI/5); for(let k=0;k<arms;k++){ const frac=(k/(arms-1))-0.5; const a=this.tent.angle + frac*spread; const L=(8 + this.tent.extend*(this.spec==='long'?20:14))*(this.focus?1.0:SETTINGS.npcReachScale); drawTentacle(g,this.x,this.y,a,L); } }
+    if(this.focus){ g.fillStyle=COLORS[3]; g.fillRect((this.x-2)|0,(this.y-4)|0,5,1); g.fillRect((this.x-2)|0,(this.y+1)|0,5,1); const w=Math.min(12, Math.floor(this.energy)); g.fillStyle=COLORS[2]; g.fillRect((this.x-6)|0,(this.y-6)|0,w,1); g.fillStyle=COLORS[0]; g.fillRect((this.x-6+w)|0,(this.y-6)|0, Math.max(0,12-w),1); }
   }
 }
 
-const WORLD = { anems: [], plankton: [], spores: [], detritus: [], fish: [], focusIndex: 0, help:false, showFlow:false, metric:{caught:0}, lastAutosave:0 };
-
-function seedWorld(){
-  WORLD.anems.length=0; WORLD.plankton.length=0; WORLD.spores.length=0; WORLD.detritus.length=0; WORLD.fish.length=0; WORLD.focusIndex=0; t=0;
-  // place starter anemone on a rock near center‑lower
-  let placed=false; let attempts=0;
-  while(!placed && attempts<2000){ const x = 40 + Math.floor(Math.random()*80); const y = 70 + Math.floor(Math.random()*60); if(isRock(x,y)) { WORLD.anems.push(new Anemone(x,y)); placed=true; } attempts++; }
-  if(!placed){ WORLD.anems.push(new Anemone(80, 120)); }
-  WORLD.anems[0].focus=true;
-  // plankton cloud (mix types)
-  for(let i=0;i<260;i++){ const kind = (Math.random()<0.8? 'micro':'macro'); const p = new Plankton(Math.random()*MAP.W, Math.random()*MAP.H, kind); if(Math.random()<0.5) p.reset(); WORLD.plankton.push(p); }
+class Starfish{ constructor(x,y){ this.x=x; this.y=y; this.vx=(Math.random()<0.5?-0.12:0.12); }
+  update(dt,time){ this.x+=this.vx; if(this.x<4){ this.x=4; this.vx=Math.abs(this.vx); } if(this.x>MAP.W-4){ this.x=MAP.W-4; this.vx=-Math.abs(this.vx); } let target=null,dmin=9999; for(const a of WORLD.anems){ if(!a.alive) continue; const dx=a.x-this.x, dy=a.y-this.y; const d2=dx*dx+dy*dy; if(d2<100 && d2<dmin){ dmin=d2; target=a; } } if(target){ target.energy -= dt*0.25; WORLD.fx.push(blink(target.x,target.y)); } }
+  draw(g){ g.fillStyle=COLORS[0]; const x=this.x|0, y=this.y|0; g.fillRect(x,y,1,1); g.fillRect(x+1,y,1,1); g.fillRect(x-1,y,1,1); g.fillRect(x,y+1,1,1); g.fillRect(x,y-1,1,1); }
 }
 
-/********* AUDIO (ambient surf) *********/
-let audioCtx = null, noiseNode = null, filter = null, gain = null; let audioOn=false;
-function initAudio(){
-  try{
-    if(audioCtx) return;
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const bufferSize = 2 * audioCtx.sampleRate;
-    const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-    const output = noiseBuffer.getChannelData(0);
-    for(let i=0; i<bufferSize; i++){ output[i] = (Math.random()*2-1) * 0.4; }
-    noiseNode = audioCtx.createBufferSource(); noiseNode.buffer = noiseBuffer; noiseNode.loop = true;
-    filter = audioCtx.createBiquadFilter(); filter.type='lowpass'; filter.frequency.value=600;
-    gain = audioCtx.createGain(); gain.gain.value=0.0; // start muted
-    noiseNode.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
-    noiseNode.start();
-  }catch(e){ /* iOS can be picky, we'll retry after gesture */ }
+class Fish{ constructor(x,y,dir=1){ this.x=x; this.y=y; this.vx=0.35*dir; this.vy=0; this.age=0; }
+  update(dt,time){ this.age+=dt; const f=flowAt(this.x,this.y,time*0.3); this.vx += f.vx*0.05; this.vy += f.vy*0.05; this.y += Math.sin(this.age*2.2)*0.1; this.x+=this.vx; this.y += this.vy*0.1; if(this.x<-6){ this.x=MAP.W+6; } if(this.x>MAP.W+6){ this.x=-6; } for(const p of WORLD.plankton){ if(!p.caught && p.kind==='macro'){ const dx=p.x-this.x, dy=p.y-this.y; if(dx*dx+dy*dy<12){ p.caught=true; } } } }
+  draw(g){ const x=this.x|0, y=this.y|0; g.fillStyle=COLORS[0]; g.fillRect(x-1,y,1,1); g.fillRect(x,y,2,1); if(((this.age*10)|0)%2===0) g.fillRect(x+2,y,1,1); }
 }
-function toggleAudio(){ initAudio(); if(!audioCtx) return; if(audioCtx.state==='suspended'){ audioCtx.resume(); }
-  audioOn = !audioOn; if(gain) gain.gain.setTargetAtTime(audioOn? 0.07 : 0.0, audioCtx.currentTime, 0.25); toast(audioOn? 'Ambience on':'Ambience off'); }
-function userInteract(){ if(!audioCtx) initAudio(); if(audioCtx && audioCtx.state==='suspended') audioCtx.resume(); }
+
+const WORLD = { anems:[], plankton:[], spores:[], detritus:[], fish:[], starfish:[], focusIndex:0, help:false, showFlow:false, metric:{caught:0}, lastAutosave:0, aim:{active:false, angle:0, power:0.4, preview:[], good:null, quality:0}, pulse:{cd:0}, fx:[], supply:{ timer:0, nextJet:6+Math.random()*8 } };
+const DEBUG = { on:false, de:0, last:null, timer:0, mouth:0, tent:0, print:0 };
+
+function sweepCapture(x,y,angle,L,onGain){ const steps=Math.max(8, L|0), r2=11; for(let i=1;i<=steps;i++){ const f=i/steps; const tx=x+Math.cos(angle)*L*f; const ty=y+Math.sin(angle)*L*f; for(const p of WORLD.plankton){ if(!p.caught){ const dx=p.x-tx, dy=p.y-ty; if(dx*dx+dy*dy<r2){ p.caught=true; onGain(p.kind==='micro'?0.40:0.80); WORLD.fx.push(spark(tx,ty)); WORLD.fx.push(plus(x,y)); if(DEBUG.on) DEBUG.tent++; } } } } }
+function drawTentacle(g,x,y,a,L){ const steps=Math.max(6,(L|0)); for(let i=1;i<=steps;i++){ const f=i/steps; const tx=x+Math.cos(a)*L*f + Math.sin(a*2+f*4)*0.3; const ty=y+Math.sin(a)*L*f + Math.cos(a*2+f*3)*0.3; g.fillStyle=COLORS[0]; g.fillRect(tx|0,(ty+1)|0,1,1); g.fillStyle=COLORS[3]; g.fillRect(tx|0,ty|0,1,1); if(i%5===0){ g.fillRect((tx|0)+1,ty|0,1,1); } } }
+
+// FX
+function spark(x,y){ return {t:0,dur:0.4,x,y, draw(g){ if(((this.t*20)|0)%2===0){ g.fillStyle=COLORS[3]; g.fillRect(x|0,y|0,1,1); } }, step(dt){ this.t+=dt; return this.t<this.dur; } }; }
+function flash(x,y){ return {t:0,dur:0.2,x,y, draw(g){ g.fillStyle=COLORS[2]; g.fillRect((x-2)|0,(y-3)|0,5,1); }, step(dt){ this.t+=dt; return this.t<this.dur; } }; }
+function plus(x,y){ return {t:0,dur:0.35,x,y, draw(g){ if(((this.t*24)|0)%2===0){ g.fillStyle=COLORS[3]; g.fillRect(x|0,(y-1)|0,1,3); g.fillRect((x-1)|0,y|0,3,1); } }, step(dt){ this.t+=dt; return this.t<this.dur; } }; }
+function blink(x,y){ return {t:0,dur:0.3,x,y, draw(g){ if(((this.t*16)|0)%2===0){ g.fillStyle=COLORS[0]; g.fillRect((x-2)|0,(y-2)|0,4,4); } }, step(dt){ this.t+=dt; return this.t<this.dur; } }; }
+
+function seedWorld(){ WORLD.anems.length=0; WORLD.plankton.length=0; WORLD.spores.length=0; WORLD.detritus.length=0; WORLD.fish.length=0; WORLD.starfish.length=0; WORLD.focusIndex=0; WORLD.aim.active=false; WORLD.pulse.cd=0; WORLD.fx.length=0; t=0; WORLD.supply.timer=0; WORLD.supply.nextJet=6+Math.random()*8; let placed=false, attempts=0; while(!placed && attempts<2000){ const x=40+Math.floor(Math.random()*80); const y=70+Math.floor(Math.random()*60); if(isRock(x,y)){ WORLD.anems.push(new Anemone(x,y)); placed=true; } attempts++; } if(!placed){ WORLD.anems.push(new Anemone(80,120)); } WORLD.anems[0].focus=true; for(let i=0;i<260;i++){ const kind=(Math.random()<0.8?'micro':'macro'); const p=new Plankton(Math.random()*MAP.W, Math.random()*MAP.H, kind); if(Math.random()<0.5) p.reset(); WORLD.plankton.push(p); } }
+
+/********* AUDIO *********/
+let audioCtx=null, noiseNode=null, filter=null, gain=null, audioOn=false; let musicOn=false, musicGain=null, musicVoices=[], musicTimer=null;
+function ensureAudio(){ try{ if(!audioCtx){ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); } if(audioCtx.state==='suspended') audioCtx.resume(); }catch(e){} }
+function initSurf(){ if(noiseNode) return; ensureAudio(); if(!audioCtx) return; const bufferSize=2*audioCtx.sampleRate; const noiseBuffer=audioCtx.createBuffer(1,bufferSize,audioCtx.sampleRate); const output=noiseBuffer.getChannelData(0); for(let i=0;i<bufferSize;i++){ output[i] = (Math.random()*2-1)*0.4; } noiseNode=audioCtx.createBufferSource(); noiseNode.buffer=noiseBuffer; noiseNode.loop=true; filter=audioCtx.createBiquadFilter(); filter.type='lowpass'; filter.frequency.value=600; gain=audioCtx.createGain(); gain.gain.value=0.0; noiseNode.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination); noiseNode.start(); }
+function toggleAudio(){ initSurf(); ensureAudio(); if(!audioCtx) return; audioOn=!audioOn; if(gain) gain.gain.setTargetAtTime(audioOn?0.07:0.0, audioCtx.currentTime, 0.25); toast(audioOn?'Surf on':'Surf off'); }
+function initMusic(){ if(musicVoices.length) return; ensureAudio(); if(!audioCtx) return; const baseGain=audioCtx.createGain(); baseGain.gain.value=0.0; baseGain.connect(audioCtx.destination); musicGain=baseGain; const mkVoice=(freq)=>{ const o=audioCtx.createOscillator(); o.type='sine'; const g=audioCtx.createGain(); g.gain.value=0.0; const lp=audioCtx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=800; o.connect(lp); lp.connect(g); g.connect(baseGain); o.start(); return {osc:o, gain:g}; }; musicVoices=[mkVoice(110), mkVoice(220), mkVoice(330)]; setInterval(()=>{ for(const v of musicVoices){ v.osc.detune.setTargetAtTime((Math.random()*20-10), audioCtx.currentTime, 2.0); } }, 3000); }
+const CHORDS=[[110,165,220],[98,147,196],[131,196,262],[123,185,246]];
+function startMusic(){ initMusic(); if(!audioCtx) return; if(musicTimer) clearInterval(musicTimer); let i=0; const step=()=>{ const chord=CHORDS[i%CHORDS.length]; for(let k=0;k<musicVoices.length;k++){ const v=musicVoices[k]; v.osc.frequency.setTargetAtTime(chord[k%chord.length], audioCtx.currentTime, 0.5); v.gain.gain.setTargetAtTime(0.015+k*0.005, audioCtx.currentTime, 1.5); } i++; }; step(); musicTimer=setInterval(step,6000); musicGain.gain.setTargetAtTime(0.8, audioCtx.currentTime, 1.0); }
+function stopMusic(){ if(!audioCtx||!musicGain) return; musicGain.gain.setTargetAtTime(0.0, audioCtx.currentTime, 0.8); if(musicTimer){ clearInterval(musicTimer); musicTimer=null; } }
+function toggleMusic(){ ensureAudio(); initMusic(); if(!audioCtx) return; musicOn=!musicOn; if(musicOn){ startMusic(); toast('Music on'); } else { stopMusic(); toast('Music off'); } }
+function userInteract(){ ensureAudio(); }
 
 /********* RENDER *********/
-function ditherRow(y){ return (y%3===0); }
-
-function drawBackground(g, time){
-  const wl = waterline(time);
-  // sky band (dithered) with subtle day tint cycle
-  const day = 0.5 + 0.5*Math.sin(time*0.03);
-  const skyCol = COLORS[3];
-  g.fillStyle = skyCol; g.fillRect(0,0,MAP.W,MAP.H);
-
-  // water body: layered stripes + caustic shimmer
-  for(let y=0;y<MAP.H;y++){
-    if(y>wl){
-      const row = y|0; const shade = ditherRow(row)? COLORS[1] : COLORS[2];
-      g.fillStyle = shade; g.fillRect(0,row, MAP.W, 1);
-      // caustic flicker dots
-      if((row%4)===0){ for(let x=2;x<MAP.W;x+=16){ if(((Math.sin((x+y*0.3)+time*2)*1000)|0)%7===0){ g.fillRect(x, row, 1,1); } } }
-    }
-  }
-  // waterline foam
-  for(let x=0;x<MAP.W;x++){
-    const y = wl + Math.sin((x*0.2)+time*2)*0.6;
-    g.fillStyle = COLORS[2]; g.fillRect(x, y|0, 1,1);
-    if(((x+time*10)|0)%7===0) g.fillRect(x, (y|0)+1, 1,1);
-  }
-  // rocks with edge highlight and speckle texture
-  for(let y=0;y<MAP.H;y++){
-    for(let x=0;x<MAP.W;x++){
-      if(isRock(x,y)){
-        const above = !isRock(x, y-1);
-        g.fillStyle = above? COLORS[0] : COLORS[1];
-        g.fillRect(x,y,1,1);
-        if(above && (x+y*3+((time*20)|0))%23===0){ g.fillStyle=COLORS[2]; g.fillRect(x,y-1,1,1); }
-      }
-    }
-  }
-  // rising bubbles from crevices
-  if(((time*8)|0)%2===0){ for(let i=0;i<3;i++){ const bx=(Math.random()*MAP.W)|0; const by=(wl+8+Math.random()*40)|0; if(isRock(bx,by)){ const by2=by-1-((time*8)|0)%8; g.fillStyle=COLORS[2]; g.fillRect(bx, by2,1,1);} } }
-}
-
-function drawFlow(g,time){ if(!WORLD.showFlow) return; g.fillStyle = COLORS[0]; for(let y=8;y<MAP.H;y+=12){ for(let x=8;x<MAP.W;x+=12){ const f = flowAt(x,y,time*0.4); const tx = x + f.vx*10; const ty = y + f.vy*10; g.fillRect(x|0,y|0,1,1); g.fillRect(tx|0,ty|0,1,1); } } }
-
-function drawUI(g,time){
-  const wl = waterline(time); const focused = WORLD.anems[WORLD.focusIndex];
-  // HUD box
-  g.fillStyle = COLORS[0]; g.fillRect(2,2, 110,26);
-  g.fillStyle = COLORS[3]; g.fillRect(3,3, 108,24);
-  g.fillStyle = COLORS[0]; g.font = '6px monospace'; g.textBaseline='top';
-  g.fillText(`Tide:${(wl|0)}  Anems:${WORLD.anems.length}`, 5,5);
-  g.fillText(`Energy:${focused?focused.energy.toFixed(1):'-'}  Spores:${WORLD.spores.length}`, 5,12);
-  g.fillText(`H=help M=amb S=spawn Tab=switch`, 5,19);
-
-  if(WORLD.help){
-    const W=132,H=64; const X=MAP.W-W-4, Y=4;
-    g.fillStyle = COLORS[0]; g.fillRect(X,Y,W,H);
-    g.fillStyle = COLORS[3]; g.fillRect(X+1,Y+1,W-2,H-2);
-    g.fillStyle = COLORS[0]; g.font='6px monospace'; let yy=Y+4; const line=(s)=>{ g.fillText(s,X+4,yy); yy+=7; };
-    line('Controls:'); line('• Hold click/touch — tentacle'); line('• Mouse/Touch — aim'); line('• S/Spawn — spores (needs energy)'); line('• Tab/Switch — change anemone'); line('• M — ambience on/off'); line('• P — pause; R — reset'); line('• F — show flow; 1/2/3 — resolution');
-  }
-}
+const ditherRow=(y)=> (y%3===0);
+function drawBackground(g,time){ const wl=waterline(time); const night=isNight(time); g.fillStyle=COLORS[3]; g.fillRect(0,0,MAP.W,MAP.H); for(let y=0;y<MAP.H;y++){ if(y>wl){ const row=y|0; const shade=ditherRow(row)?COLORS[1]:COLORS[2]; g.fillStyle=shade; g.fillRect(0,row,MAP.W,1); if((row%4)===0){ for(let x=2;x<MAP.W;x+=16){ if(((Math.sin((x+y*0.3)+time*2)*1000)|0)%7===0){ g.fillRect(x,row,1,1); } } } } } for(let x=0;x<MAP.W;x++){ const y=wl + Math.sin((x*0.2)+time*2)*0.6; g.fillStyle=COLORS[2]; g.fillRect(x,y|0,1,1); if(((x+time*10)|0)%7===0) g.fillRect(x,(y|0)+1,1,1); } for(let y=0;y<MAP.H;y++){ for(let x=0;x<MAP.W;x++){ if(isRock(x,y)){ const above=!isRock(x,y-1); g.fillStyle=above?COLORS[0]:COLORS[1]; g.fillRect(x,y,1,1); if(above && (x+y*3+((time*20)|0))%23===0){ g.fillStyle=COLORS[2]; g.fillRect(x,y-1,1,1); } } } } if(night){ g.fillStyle='rgba(15,56,15,0.35)'; g.fillRect(0,0,MAP.W,MAP.H); } if(((time*8)|0)%2===0){ for(let i=0;i<3;i++){ const bx=(Math.random()*MAP.W)|0; const by=(wl+8+Math.random()*40)|0; if(isRock(bx,by)){ const by2=by-1-((time*8)|0)%8; g.fillStyle=COLORS[2]; g.fillRect(bx,by2,1,1); } } } }
+function drawFlow(g,time){ if(!WORLD.showFlow) return; g.fillStyle=COLORS[0]; for(let y=8;y<MAP.H;y+=12){ for(let x=8;x<MAP.W;x+=12){ const f=flowAt(x,y,time*0.4); const tx=x+f.vx*10; const ty=y+f.vy*10; g.fillRect(x|0,y|0,1,1); g.fillRect(tx|0,ty|0,1,1); } } }
+function drawUI(g,time){ const wl=waterline(time); const focused=WORLD.anems[WORLD.focusIndex]; g.fillStyle=COLORS[0]; g.fillRect(2,2,140,32); g.fillStyle=COLORS[3]; g.fillRect(3,3,138,30); g.fillStyle=COLORS[0]; g.font='6px monospace'; g.textBaseline='top'; const dn=isNight(time)?'Night':'Day'; g.fillText(`Tide:${(wl|0)}  ${dn}  Anems:${WORLD.anems.length}`,5,5); { const energyStr = focused? focused.energy.toFixed(1) : '-'; const rate = DEBUG.de||0; const arrow = rate>0.05?'\u2191':(rate<-0.05?'\u2193':'\u2192'); const rateStr = isFinite(rate)? (Math.abs(rate)>=0.01? rate.toFixed(2)+'/s' : '0/s') : ''; g.fillText(`Energy:${energyStr} ${arrow}${rateStr}  Spores:${WORLD.spores.length}`,5,12); } const cd=Math.max(0,WORLD.pulse.cd).toFixed(0); g.fillText(`Pulse:${cd}s H:help M:surf N:music Tab:switch`,5,19); g.fillText(`Hold to feed • S=Aim/Cast • Esc=Cancel • E=Pulse • F=flow`,5,26); if(WORLD.aim.active){ g.fillStyle=COLORS[0]; g.fillRect(2,MAP.H-18,MAP.W-4,16); g.fillStyle=COLORS[3]; g.fillRect(3,MAP.H-17,MAP.W-6,14); g.fillStyle=COLORS[0]; const q=WORLD.aim.quality; const label=q>0.65?'GOOD':(q>0.4?'OK':'RISKY'); g.fillText(`Aim ${(WORLD.aim.angle*180/Math.PI)|0}°  power ${(WORLD.aim.power*100|0)}%   spot:${label}`,6,MAP.H-14); g.fillText(`S=Cast • Esc=Cancel`,6,MAP.H-7); } if(WORLD.help){ const W=138,H=78; const X=MAP.W-W-4,Y=4; g.fillStyle=COLORS[0]; g.fillRect(X,Y,W,H); g.fillStyle=COLORS[3]; g.fillRect(X+1,Y+1,W-2,H-2); g.fillStyle=COLORS[0]; g.font='6px monospace'; let yy=Y+4; const line=(s)=>{ g.fillText(s,X+4,yy); yy+=7; }; line('Controls:'); line('• Hold click/touch — tentacles'); line('• S — Aim, S again — Cast spores'); line('• E — Pulse current (push nearby)'); line('• Tab — switch anemone'); line('• M — surf ambience • N — music'); line('• F — show flow'); line('• P — pause; R — reset; 1/2/3 res'); } }
 
 /********* SIM LOOP *********/
-let started = false;
-function startGame(){ started = true; seedWorld(); setupMobileHud(); cancelAnimationFrame(frameId); lastRAF = performance.now(); loop(lastRAF); loadWorld(); toast('Tip: spawn near the tide line.'); }
+let started=false, accumulator=0, lastRAF=0; function startGame(){ started=true; overlay.innerHTML=''; overlay.style.pointerEvents='none'; overlay.classList.add('hidden'); seedWorld(); setupMobileHud(); cancelAnimationFrame(frameId); lastRAF=performance.now(); loop(lastRAF); toast('Tip: Hold to feed. Press S to aim.'); }
+function loop(now){ frameId=requestAnimationFrame(loop); const elapsed=(now-lastRAF)/1000; lastRAF=now; if(!paused){ accumulator += Math.min(elapsed,0.1); while(accumulator>=dt){ step(dt); t+=dt; accumulator-=dt; } } render(); MOUSE.clicked=false; }
 
-let accumulator = 0, lastRAF = 0;
-function loop(now){ frameId = requestAnimationFrame(loop); const elapsed = (now - lastRAF)/1000; lastRAF = now; if(!paused){ accumulator += Math.min(elapsed, 0.1); while(accumulator >= dt){ step(dt); t += dt; accumulator -= dt; } } render(); MOUSE.clicked=false; }
-
-function step(dt){
-  // input hotkeys
-  if(KEYS['h']){ WORLD.help = !WORLD.help; KEYS['h']=false; }
-  if(KEYS['m']){ toggleAudio(); KEYS['m']=false; }
-  if(KEYS['p']){ paused = !paused; KEYS['p']=false; }
-  if(KEYS['r']){ seedWorld(); KEYS['r']=false; saveWorld(); }
-  if(KEYS['f']){ WORLD.showFlow = !WORLD.showFlow; KEYS['f']=false; }
-  if(KEYS['tab']){ switchFocus(); KEYS['tab']=false; }
-  if(KEYS['1']){ BASE_W=GB.W; BASE_H=GB.H; fit(); KEYS['1']=false; }
-  if(KEYS['2']){ BASE_W=Math.floor(GB.W*1.5); BASE_H=Math.floor(GB.H*1.5); fit(); KEYS['2']=false; }
-  if(KEYS['3']){ BASE_W=GB.W*2; BASE_H=GB.H*2; fit(); KEYS['3']=false; }
-  if(KEYS['s']){ doSpawn(); KEYS['s']=false; }
-
-  // update entities
-  for(const p of WORLD.plankton) p.update(dt, t);
-  for(const s of WORLD.spores){ s.update(dt,t); if(s.settled){ const nx = Math.max(2, Math.min(MAP.W-3, s.x|0)); const ny = Math.max(2, Math.min(MAP.H-3, s.y|0)); let ok = isRock(nx,ny); if(ok){ for(const a of WORLD.anems){ const dx=a.x-nx, dy=a.y-ny; if(dx*dx+dy*dy<100){ ok=false; break; } } } if(ok){ const a = new Anemone(nx,ny); WORLD.anems.push(a); if(WORLD.anems.length%4===0){ // add some detritus as ecosystem feedback
-            for(let k=0;k<6;k++){ WORLD.detritus.push(new Detritus(nx+Math.random()*6-3, ny+Math.random()*6-3)); }
-          }
-      } s.fail=true; s.settled=false; } }
-  for(const a of WORLD.anems) a.update(dt,t);
-  for(const d of WORLD.detritus){ d.update(dt,t); }
-  WORLD.detritus = WORLD.detritus.filter(d=>d.age<20);
-
-  // gentle autosave
+function step(dt){ if(KEYS['h']){ WORLD.help=!WORLD.help; KEYS['h']=false; } if(KEYS['m']){ toggleAudio(); KEYS['m']=false; } if(KEYS['n']){ toggleMusic(); KEYS['n']=false; } if(KEYS['p']){ paused=!paused; KEYS['p']=false; } if(KEYS['r']){ seedWorld(); KEYS['r']=false; saveWorld(); } if(KEYS['f']){ WORLD.showFlow=!WORLD.showFlow; KEYS['f']=false; } if(KEYS['tab']){ switchFocus(); KEYS['tab']=false; } if(KEYS['1']){ BASE_W=GB.W; BASE_H=GB.H; fit(); KEYS['1']=false; } if(KEYS['2']){ BASE_W=Math.floor(GB.W*1.5); BASE_H=Math.floor(GB.H*1.5); fit(); KEYS['2']=false; } if(KEYS['3']){ BASE_W=GB.W*2; BASE_H=GB.H*2; fit(); KEYS['3']=false; } if(KEYS['s']){ if(!WORLD.aim.active){ beginAim(); } else { castSpores(); } KEYS['s']=false; } if(KEYS['e']){ tryPulse(); KEYS['e']=false; } if(KEYS['escape']){ if(WORLD.aim.active){ cancelAim(); } KEYS['escape']=false; }
+  for(const p of WORLD.plankton) p.update(dt,t);
+  for(const s of WORLD.spores){ s.update(dt,t); if(s.settled){ const nx=Math.max(2,Math.min(MAP.W-3, s.x|0)); const ny=Math.max(2,Math.min(MAP.H-3, s.y|0)); let ok=isRock(nx,ny); if(ok){ for(const a of WORLD.anems){ const dx=a.x-nx, dy=a.y-ny; if(dx*dx+dy*dy<100){ ok=false; break; } } } if(ok){ const a=new Anemone(nx,ny); WORLD.anems.push(a); toast('New colony settled'); if(WORLD.anems.length%4===0){ for(let k=0;k<6;k++){ WORLD.detritus.push(new Detritus(nx+Math.random()*6-3, ny+Math.random()*6-3)); } } } s.fail=true; s.settled=false; } }
+  for(const a of WORLD.anems){ a.update(dt,t); const wl=waterline(t); if(a.focus && a.energy<1 && a.y>wl){ if(Math.random()<0.02){ WORLD.detritus.push(new Detritus(a.x+Math.random()*6-3, a.y-6)); } } }
+  for(const d of WORLD.detritus) d.update(dt,t); WORLD.detritus=WORLD.detritus.filter(d=>d.age<20);
+  if(WORLD.anems.length>=6 && WORLD.fish.length<1){ WORLD.fish.push(new Fish(-4, waterline(t)+10, 1)); toast('Small fish dart across the reef.'); }
+  if(WORLD.anems.length>=12 && WORLD.fish.length<2){ WORLD.fish.push(new Fish(MAP.W+4, waterline(t)+16, -1)); }
+  for(const f of WORLD.fish) f.update(dt,t);
+  if(WORLD.anems.length>=5 && WORLD.starfish.length<1){ WORLD.starfish.push(new Starfish(10, MAP.H-10)); toast('A starfish prowls the shallows…'); }
+  if(WORLD.anems.length>=10 && WORLD.starfish.length<2){ WORLD.starfish.push(new Starfish(MAP.W-12, MAP.H-12)); toast('Another starfish arrives.'); }
+  for(const s of WORLD.starfish) s.update(dt,t);
+  updateSupply(dt);
+  const nightNow=isNight(t); if(nightNow!==lastIsNight){ toast(nightNow?'Night bloom':'Dawn'); lastIsNight=nightNow; }
+  const q=Math.floor(((t%TIDE.period)/TIDE.period)*4); if(q!==lastQuarter){ if(q===1) toast('High tide'); if(q===3) toast('Low tide'); lastQuarter=q; }
   WORLD.lastAutosave += dt; if(WORLD.lastAutosave>10){ saveWorld(); WORLD.lastAutosave=0; }
+  if(WORLD.pulse.cd>0) WORLD.pulse.cd=Math.max(0, WORLD.pulse.cd-dt); if(lastPulseCd>0 && WORLD.pulse.cd===0){ toast('Pulse ready'); } lastPulseCd=WORLD.pulse.cd; if(WORLD.aim.active){ updateAimPreview(); }
+  updateEnergyDebug(dt);
 }
 
-function render(){ const g = octx; g.imageSmoothingEnabled = false; drawBackground(g, t); for(const s of WORLD.spores) s.draw(g); for(const p of WORLD.plankton) p.draw(g); for(const a of WORLD.anems) a.draw(g,t); for(const d of WORLD.detritus) d.draw(g); drawFlow(g,t); drawUI(g,t); ctx.imageSmoothingEnabled = false; ctx.drawImage(off, 0,0, off.width*scale, off.height*scale); }
+function updateEnergyDebug(dt){
+  const f = WORLD.anems[WORLD.focusIndex];
+  if(!f) return;
+  if(DEBUG.last==null){ DEBUG.last=f.energy; DEBUG.timer=0; DEBUG.de=0; return; }
+  DEBUG.timer += dt;
+  if(DEBUG.timer>=0.5){ DEBUG.de = (f.energy - DEBUG.last)/DEBUG.timer; DEBUG.last = f.energy; DEBUG.timer = 0; }
+}
+
+function updateSupply(dt){ WORLD.supply.timer += dt; const wl=waterline(t); const tideNorm=(wl-(TIDE.mean-TIDE.amp))/(2*TIDE.amp); const night=isNight(t); const microTarget=Math.floor(200*(0.9+0.3*tideNorm)); const macroTarget=Math.floor(60*(night?1.35:1.0)); let micro=0,macro=0; for(const p of WORLD.plankton){ if(!p.caught){ if(p.kind==='micro') micro++; else macro++; } } const needMicro=Math.max(0, microTarget-micro); const needMacro=Math.max(0, macroTarget-macro); if(needMicro>0) injectPlankton('micro', needMicro, wl); if(needMacro>0) injectPlankton('macro', Math.ceil(needMacro*0.6), wl); if(WORLD.supply.timer>WORLD.supply.nextJet){ WORLD.supply.timer=0; WORLD.supply.nextJet = 6+Math.random()*10; ribbonJet(night?'macro':'micro', wl); } }
+
+function pickRecyclable(){ for(let tries=0; tries<20; tries++){ const p=WORLD.plankton[(Math.random()*WORLD.plankton.length)|0]; if(p.caught || p.age>10) return p; } return WORLD.plankton[(Math.random()*WORLD.plankton.length)|0]; }
+function injectPlankton(kind,count,wl){ for(let i=0;i<count;i++){ const p=pickRecyclable(); p.kind=kind; p.caught=false; p.energy=(kind==='micro'?1:1.8); p.age=0; p.vx=0; p.vy=0; p.x=Math.random()*MAP.W; p.y=Math.max(0, Math.min(MAP.H-2, (wl-16)+Math.random()*50-10)); p.layer=Math.random(); p.vx=(Math.random()-0.5)*0.2; p.vy=0.15+Math.random()*0.15; } }
+function ribbonJet(kind,wl){ const y=Math.max(6, Math.min(MAP.H-10, wl+8+(Math.random()*28-14))); for(let i=0;i<24;i++){ const p=pickRecyclable(); p.kind=kind; p.caught=false; p.energy=(kind==='micro'?1:1.8); p.age=0; p.x=(i/(24-1))*MAP.W; p.y=y+(Math.random()*12-6); p.vx=0; p.vy=0; p.layer=Math.random(); } if(Math.random()<0.5) toast('A current ribbon sweeps the reef'); }
+
+function render(){ const g=octx; g.imageSmoothingEnabled=false; drawBackground(g,t); for(const s of WORLD.spores) s.draw(g); for(const p of WORLD.plankton) p.draw(g); for(const f of WORLD.fish) f.draw(g); for(const a of WORLD.anems) a.draw(g,t); for(const d of WORLD.detritus) d.draw(g); for(const sf of WORLD.starfish) sf.draw(g); drawFlow(g,t); WORLD.fx = WORLD.fx.filter(e=>{ e.draw(g); return e.step?e.step(1/60):false; }); if(WORLD.aim.active){ g.fillStyle=COLORS[0]; for(const pt of WORLD.aim.preview){ g.fillRect(pt.x|0, pt.y|0, 1,1); } if(WORLD.aim.good){ const q=WORLD.aim.quality; g.fillStyle=(q>0.65?COLORS[3]:(q>0.4?COLORS[2]:COLORS[0])); g.fillRect(WORLD.aim.good.x|0, WORLD.aim.good.y|0, 2,2); } } drawUI(g,t); ctx.imageSmoothingEnabled=false; ctx.drawImage(off,0,0, off.width*scale, off.height*scale); }
 
 /********* Focus & Actions *********/
-function switchFocus(){ if(WORLD.anems.length===0) return; WORLD.anems[WORLD.focusIndex].focus=false; WORLD.focusIndex = (WORLD.focusIndex+1)%WORLD.anems.length; WORLD.anems[WORLD.focusIndex].focus=true; toast(`Focused anemone ${WORLD.focusIndex+1}/${WORLD.anems.length}`); }
-function doSpawn(){ const a = WORLD.anems[WORLD.focusIndex]; const n=a.trySpawn(); if(n>0){ toast(`Spawned ${n} spores`); } else { toast('Need more energy'); } }
+function switchFocus(){ if(WORLD.anems.length===0) return; WORLD.anems[WORLD.focusIndex].focus=false; WORLD.focusIndex=(WORLD.focusIndex+1)%WORLD.anems.length; WORLD.anems[WORLD.focusIndex].focus=true; if(WORLD.aim.active) beginAim(true); toast(`Focused anemone ${WORLD.focusIndex+1}/${WORLD.anems.length}`); }
+function doSpawn(){ if(!WORLD.aim.active) beginAim(); else castSpores(); }
 
 /********* Save/Load *********/
-function saveWorld(){ try{ const data = { seed: MAP.seed, anems: WORLD.anems.map(a=>({x:a.x,y:a.y,energy:+a.energy.toFixed(2),spec:a.spec})), t:+t.toFixed(2) }; localStorage.setItem('reef_save', JSON.stringify(data)); localStorage.setItem('reef_seed', String(MAP.seed)); }catch(e){} }
-function loadWorld(){ try{ const raw = localStorage.getItem('reef_save'); if(!raw) return; const data = JSON.parse(raw); if(!data || !data.anems) return; WORLD.anems.length=0; for(const it of data.anems){ const a = new Anemone(it.x,it.y); a.energy=it.energy||4; a.spec=it.spec||a.spec; WORLD.anems.push(a); } if(WORLD.anems.length>0){ WORLD.focusIndex=0; WORLD.anems[0].focus=true; } toast('Loaded previous reef'); }catch(e){} }
+function saveWorld(){ try{ const data={ seed:MAP.seed, anems:WORLD.anems.map(a=>({x:a.x,y:a.y,energy:+a.energy.toFixed(2),spec:a.spec})), t:+t.toFixed(2) }; localStorage.setItem('reef_save', JSON.stringify(data)); localStorage.setItem('reef_seed', String(MAP.seed)); }catch(e){} }
+function loadWorld(){ try{ const raw=localStorage.getItem('reef_save'); if(!raw) return; const data=JSON.parse(raw); if(!data||!data.anems) return; WORLD.anems.length=0; for(const it of data.anems){ const a=new Anemone(it.x,it.y); a.energy=it.energy||4; a.spec=it.spec||a.spec; WORLD.anems.push(a); } if(WORLD.anems.length>0){ WORLD.focusIndex=0; WORLD.anems[0].focus=true; } toast('Loaded previous reef'); }catch(e){} }
 
 /********* Mobile HUD *********/
-const mobileHud = document.getElementById('mobileHud');
-function setupMobileHud(){ if(!IS_TOUCH) return; mobileHud.style.display='flex'; document.getElementById('mSpawn').onclick = ()=>{ userInteract(); doSpawn(); };
-  document.getElementById('mSwitch').onclick = ()=>{ userInteract(); switchFocus(); };
-  document.getElementById('mAmb').onclick = ()=>{ userInteract(); toggleAudio(); };
-  document.getElementById('mHelp').onclick = ()=>{ WORLD.help=!WORLD.help; };
-  document.getElementById('mPause').onclick = ()=>{ paused=!paused; toast(paused?'Paused':'Unpaused'); };
-}
+const mobileHud=document.getElementById('mobileHud');
+function setupMobileHud(){ if(!IS_TOUCH) return; mobileHud.style.display='flex'; document.getElementById('mSpawn').onclick=()=>{ userInteract(); doSpawn(); updateMobileSpawnLabel(); }; document.getElementById('mPulse').onclick=()=>{ userInteract(); tryPulse(); }; document.getElementById('mSwitch').onclick=()=>{ userInteract(); switchFocus(); }; document.getElementById('mAmb').onclick=()=>{ userInteract(); toggleAudio(); }; const mm=document.getElementById('mMusic'); if(mm) mm.onclick=()=>{ userInteract(); toggleMusic(); }; document.getElementById('mHelp').onclick=()=>{ WORLD.help=!WORLD.help; }; document.getElementById('mPause').onclick=()=>{ paused=!paused; toast(paused?'Paused':'Unpaused'); }; }
 
 /********* Toast *********/
-const toastEl = document.getElementById('toast');
-let toastTimer = 0;
-function toast(s){ toastEl.textContent = s; toastEl.style.display='block'; clearTimeout(toastTimer); toastTimer = setTimeout(()=>{ toastEl.style.display='none'; }, 1400); }
+const toastEl=document.getElementById('toast'); let toastTimer=0; function toast(s){ toastEl.textContent=s; toastEl.style.display='block'; clearTimeout(toastTimer); toastTimer=setTimeout(()=>{ toastEl.style.display='none'; },1400); }
 
-})();
-</script>
+/********* Aim / Cast *********/
+function beginAim(keep=false){ const a=WORLD.anems[WORLD.focusIndex]; WORLD.aim.active=true; if(!keep){ WORLD.aim.power=0.4; } WORLD.aim.angle=Math.atan2(MOUSE.y-a.y, MOUSE.x-a.x); updateAimFromPointer(); updateAimPreview(); updateMobileSpawnLabel(); }
+function updateAimFromPointer(){ const a=WORLD.anems[WORLD.focusIndex]; const dx=MOUSE.x-a.x, dy=MOUSE.y-a.y; WORLD.aim.angle=Math.atan2(dy,dx); const dist=Math.min(30, Math.hypot(dx,dy)); WORLD.aim.power=Math.max(0.15, dist/30); }
+function updateAimPreview(){ const a=WORLD.anems[WORLD.focusIndex]; const ang=WORLD.aim.angle; const pow=WORLD.aim.power; const startX=a.x, startY=a.y; let vx=Math.cos(ang)*pow*2.0, vy=Math.sin(ang)*pow*2.0; const pts=[]; let good=null; let px=startX, py=startY; for(let i=0;i<40;i++){ const f=flowAt(px,py,(t+i*0.25)*0.5); vx+=f.vx*0.12; vy+=f.vy*0.12; px+=vx; py+=vy; pts.push({x:px,y:py}); const wl=waterline(t+i*0.25); const goodDepth=py>wl-12 && py<wl+44; if(goodDepth && isRock(px|0, py|0)){ good={x:px,y:py}; break; } if(px<1||px>MAP.W-2||py<1||py>MAP.H-2) break; } WORLD.aim.preview=pts; WORLD.aim.good=good; WORLD.aim.quality = good? siteQ(good.x|0, good.y|0) : 0; }
+function castSpores(){ const an=WORLD.anems[WORLD.focusIndex]; if(!an || an.spawnCooldown>0){ WORLD.aim.active=false; updateMobileSpawnLabel(); return; } if(an.energy<6){ toast('Need more energy'); WORLD.aim.active=false; updateMobileSpawnLabel(); return; } const n=10 + Math.floor((an.energy-4)*3); an.energy-=4; an.spawnCooldown=8; const ang=WORLD.aim.angle; const pow=WORLD.aim.power; for(let i=0;i<n;i++){ const jitter=(Math.random()-0.5)*0.3; const angi=ang + jitter; const speed= pow*2.0*(0.8+Math.random()*0.6); const s=new Spore(an.x, an.y); s.vx=Math.cos(angi)*speed; s.vy=Math.sin(angi)*speed; WORLD.spores.push(s); } WORLD.aim.active=false; updateMobileSpawnLabel(); toast(`Cast ${n} spores`); }
+function updateMobileSpawnLabel(){ if(!IS_TOUCH) return; const el=document.getElementById('mSpawn'); if(el) el.textContent = WORLD.aim.active? 'Cast' : 'Spawn'; }
+function cancelAim(){ if(WORLD.aim.active){ WORLD.aim.active=false; updateMobileSpawnLabel(); toast('Aim cancelled'); }}
+
+/********* Pulse *********/
+function tryPulse(){ if(WORLD.pulse.cd>0){ toast('Pulse recharging…'); return; } const a=WORLD.anems[WORLD.focusIndex]; if(!a) return; WORLD.pulse.cd=6; const R=26; const ox=a.x, oy=a.y; const push=(ent)=>{ const dx=ent.x-ox, dy=ent.y-oy; const d=Math.hypot(dx,dy); if(d>0 && d<R){ const f=(1-d/R)*2.0; ent.vx=(ent.vx||0)+(dx/d)*f; ent.vy=(ent.vy||0)+(dy/d)*f; } }; for(const p of WORLD.plankton) push(p); for(const s of WORLD.spores) push(s); for(const d of WORLD.detritus) push(d); for(const f of WORLD.fish) push(f); for(const sf of WORLD.starfish){ const dummy={x:sf.x,y:sf.y,vx:0,vy:0}; push(dummy); sf.x+=dummy.vx; sf.y+=dummy.vy; } ringEffect(a.x,a.y); }
+function ringEffect(x,y){ const cx=(x*scale)|0, cy=(y*scale)|0; const maxR=scale*26; let r=0; const step=()=>{ prctx.clearRect(0,0,pulseCanvas.width,pulseCanvas.height); prctx.beginPath(); prctx.arc(cx,cy,r,0,Math.PI*2); prctx.strokeStyle='rgba(155,188,15,0.6)'; prctx.lineWidth=2; prctx.stroke(); r+=8; if(r<maxR){ requestAnimationFrame(step); } else { prctx.clearRect(0,0,pulseCanvas.width,pulseCanvas.height); } }; step(); }
+
+/********* Debug toggle & sampler *********/
+window.addEventListener('keydown',e=>{ if(e.key && e.key.toLowerCase()==='d'){ DEBUG.on=!DEBUG.on; console.log('DEBUG mode:', DEBUG.on); toast(DEBUG.on?'Debug on':'Debug off'); }});
+
+/********* Tiny self-tests (sanity) *********/
+function assert(c,msg){ if(!c) throw new Error('Test failed: '+msg); }
+function selfTest(){
+  const f=flowAt(10,10,0); assert(typeof f.vx==='number' && typeof f.vy==='number','flowAt numbers');
+  const p=new Plankton(0,0); p.reset(); assert(p.layer>=0 && p.layer<=1,'plankton layer');
+  const fTop=flowAt(80,10,0), fBot=flowAt(80,130,0); assert(Math.abs(fTop.vx - fBot.vx) > 0.01,'vertical shear present');
+  // aim cancel test
+  WORLD.aim.active=true; cancelAim(); assert(!WORLD.aim.active,'cancelAim works');
+}
+selfTest();
+
+})();</script>
 </body>
 </html>
