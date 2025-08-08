@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Anemone Reef — GB Prototype A</title>
+  <style>
+    :root{
+      --gb0:#0f380f; /* darkest */
+      --gb1:#306230; /* dark */
+      --gb2:#8bac0f; /* light */
+      --gb3:#9bbc0f; /* lightest */
+      --ink:#0f380f;
+      --paper:#e0f4a0;
+    }
+    html, body { height: 100%; margin: 0; background: #0b120a; color: var(--gb3); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    #wrap { position: fixed; inset: 0; display: grid; place-items: center; }
+    canvas { image-rendering: pixelated; image-rendering: crisp-edges; background: #0a140a; box-shadow: 0 8px 40px rgba(0,0,0,0.6), inset 0 0 0 8px #0b1609, inset 0 0 0 12px #132310; border-radius: 16px; }
+    #overlay { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; }
+    .card { pointer-events: auto; background: #102112; color: var(--gb3); border: 2px solid var(--gb1); border-radius: 12px; padding: 14px 16px; width: min(92vw, 520px); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    .row { display:flex; gap:12px; align-items:center; justify-content: space-between; }
+    .btn { pointer-events:auto; appearance:none; border:2px solid var(--gb2); background: var(--gb1); color: #f3ffd5; border-radius:10px; padding:10px 14px; font-weight:700; cursor:pointer; }
+    .btn:hover{ filter:brightness(1.1); }
+    .small { color: var(--gb2); font-size: 12px; opacity:0.85; }
+    a { color: var(--gb2); text-decoration: none; border-bottom:1px dotted var(--gb2); }
+  </style>
+</head>
+<body>
+  <div id="wrap"><canvas id="game"></canvas></div>
+  <div id="overlay"></div>
+<script>
+(function(){
+'use strict';
+
+/************************************
+ *  ANEMONE REEF — GAME BOY PROTOTYPE
+ *  Single-file, Canvas2D, no deps
+ *  Designed to run in ChatGPT Canvas
+ ************************************/
+
+// --- Config ---
+const GB = { W:160, H:144 }; // native Game Boy resolution
+let BASE_W = GB.W, BASE_H = GB.H; // can scale up via hotkeys 1/2/3
+
+const PALETTE = {
+  0: '#0f380f', // darkest
+  1: '#306230', // dark
+  2: '#8bac0f', // light
+  3: '#9bbc0f'  // lightest
+};
+
+const COLORS = [PALETTE[0], PALETTE[1], PALETTE[2], PALETTE[3]];
+
+// Controls
+const KEYS = {};
+let MOUSE = { x:0, y:0, down:false, clicked:false };
+
+// Canvas setup (offscreen low-res -> upscale to fit)
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const off = document.createElement('canvas');
+let octx = off.getContext('2d');
+let scale = 4; // runtime-computed
+
+function fit() {
+  const pad = 24; // visual breathing room
+  const ww = window.innerWidth - pad*2;
+  const wh = window.innerHeight - pad*2;
+  // keep aspect GB.W:GB.H
+  const s = Math.floor(Math.min(ww/BASE_W, wh/BASE_H));
+  scale = Math.max(2, s);
+  canvas.width = BASE_W * scale;
+  canvas.height = BASE_H * scale;
+  off.width = BASE_W;
+  off.height = BASE_H;
+  octx = off.getContext('2d');
+  octx.imageSmoothingEnabled = false;
+  ctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', fit);
+fit();
+
+// Input
+canvas.addEventListener('mousemove', (e)=>{
+  const rect = canvas.getBoundingClientRect();
+  MOUSE.x = Math.floor((e.clientX - rect.left)/scale);
+  MOUSE.y = Math.floor((e.clientY - rect.top)/scale);
+});
+canvas.addEventListener('mousedown', ()=>{ MOUSE.down = true; MOUSE.clicked = true; userInteract(); });
+window.addEventListener('mouseup', ()=>{ MOUSE.down = false; });
+window.addEventListener('keydown', (e)=>{ KEYS[e.key.toLowerCase()] = true; userInteract(); e.preventDefault(); });
+window.addEventListener('keyup', (e)=>{ KEYS[e.key.toLowerCase()] = false; });
+
+// Overlay UI (HTML) for instructions / start
+const overlay = document.getElementById('overlay');
+function showStartCard(){
+  overlay.innerHTML = `
+  <div class="card">
+    <div style="font-weight:900; font-size:18px; letter-spacing:0.3px; margin-bottom:4px;">ANEMONE REEF — Game Boy Prototype</div>
+    <div class="small" style="margin-bottom:10px;">Side‑view tidal reef. You are a colony of sea anemones. Feed from currents, time your tentacles, 
+    and broadcast spawn to settle new polyps on rock. The more you thrive, the more life returns.</div>
+    <div style="display:grid; gap:6px; margin:10px 0 8px;">
+      <div>• <b>Click & hold</b>: extend tentacles on focused anemone</div>
+      <div>• <b>Mouse</b>: aim tentacles</div>
+      <div>• <b>Tab</b>: cycle anemone focus &nbsp;•&nbsp; <b>S</b>: spawn spores (costs energy)</div>
+      <div>• <b>H</b>: help overlay &nbsp;•&nbsp; <b>M</b>: toggle ambience &nbsp;•&nbsp; <b>P</b>: pause</div>
+      <div>• <b>1/2/3</b>: resolution scale (GB/ +50%/ +100%)</div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <button id="startBtn" class="btn">Start</button>
+      <div class="small">Prototype A — single file. Best in Chrome.</div>
+    </div>
+  </div>`;
+  document.getElementById('startBtn').onclick = ()=>{ overlay.innerHTML=''; startGame(); };
+}
+showStartCard();
+
+/********* WORLD SIM *********/
+
+// Time
+let t = 0; // seconds
+let dt = 1/60; // fixed timestep
+let paused = false;
+let frameId = 0;
+
+// Tide settings
+const TIDE = {
+  mean: 88,        // mean waterline y in base px
+  amp: 26,         // amplitude (pixels)
+  period: 90,      // seconds per cycle
+};
+
+function waterline(time){
+  return TIDE.mean + TIDE.amp * Math.sin((time / TIDE.period) * Math.PI * 2);
+}
+
+// Background: static rock map + sand
+const MAP = { W: GB.W, H: GB.H, rock: new Uint8Array(GB.W*GB.H), seed: Math.random()*1000 };
+
+function seededRng(seed){
+  // xorshift32
+  let x = (seed*1e6)|0 || 123456789;
+  return ()=>{ x^=x<<13; x^=x>>>17; x^=x<<5; return (x>>>0)/4294967296; };
+}
+
+function makeRockMap(){
+  const rnd = seededRng(MAP.seed);
+  // simple fbm-ish noise via sines; deterministic
+  function n2(x,y){
+    return 0.5+0.5*(
+      Math.sin(x*0.09 + Math.cos(y*0.05)) * 0.6 +
+      Math.sin(y*0.07 + Math.cos(x*0.08)) * 0.4
+    );
+  }
+  for(let y=0;y<MAP.H;y++){
+    for(let x=0;x<MAP.W;x++){
+      const i = y*MAP.W + x;
+      const shelf = 0.55 + 0.25*Math.sin((x+18)*0.02) + 0.1*Math.cos((x+80)*0.06);
+      const floor = 0.75 + 0.1*n2(x*0.5,y*0.5);
+      const base = y/MAP.H;
+      const r = n2(x+30,y+10)*0.6 + base*0.6;
+      // rock if below floor or inside noisy outcrop islands
+      MAP.rock[i] = (base>floor || r>0.78) ? 1 : 0;
+    }
+  }
+}
+makeRockMap();
+
+function isRock(x,y){
+  x|=0; y|=0;
+  if(x<0||y<0||x>=MAP.W||y>=MAP.H) return 0;
+  return MAP.rock[y*MAP.W + x];
+}
+
+// Flow field (divergence-free-ish curl of a scalar field)
+function scalarNoise(x,y,t){
+  return Math.sin((x*0.07) + Math.sin(y*0.05 + t*0.6)) + Math.cos((y*0.09) + Math.cos(x*0.04 - t*0.5));
+}
+function flowAt(x,y,time){
+  const eps = 0.5;
+  const n1 = scalarNoise(x+eps, y, time) - scalarNoise(x-eps, y, time);
+  const n2 = scalarNoise(x, y+eps, time) - scalarNoise(x, y-eps, time);
+  let vx =  n2 * 0.35; // + d/dy n
+  let vy = -n1 * 0.35; // - d/dx n
+  // slow drift with tide stage
+  const wl = waterline(time);
+  const tidePhase = Math.sin((time / TIDE.period) * Math.PI * 2);
+  vy += 0.05 * tidePhase;
+  // damp inside rock
+  if(isRock(x,y)) { vx*=0.1; vy*=0.1; }
+  return {vx,vy};
+}
+
+// Entities
+class Plankton {
+  constructor(x,y){ this.x=x; this.y=y; this.vx=0; this.vy=0; this.caught=false; this.age=0; this.energy=1; }
+  update(dt,time){
+    if(this.caught){ this.energy -= dt*0.6; return; }
+    const f = flowAt(this.x, this.y, time*0.4);
+    this.vx += f.vx*0.5 + (Math.random()-0.5)*0.04;
+    this.vy += f.vy*0.5 + (Math.random()-0.5)*0.04;
+    // slight drag
+    this.vx *= 0.94; this.vy *= 0.94;
+    this.x += this.vx; this.y += this.vy;
+    this.age += dt;
+    // wrap/respawn
+    if(this.x< -2 || this.x>MAP.W+2 || this.y>MAP.H+2){ this.reset(); }
+  }
+  reset(){
+    // Spawn from edges/bottom with bias on inflow side
+    const side = Math.random();
+    if(side<0.45){ this.x = -1; this.y = Math.random()*MAP.H; }
+    else if(side<0.9){ this.x = MAP.W+1; this.y = Math.random()*MAP.H; }
+    else { this.x = Math.random()*MAP.W; this.y = MAP.H-1; }
+    this.vx=0; this.vy=0; this.caught=false; this.energy=1; this.age=0;
+  }
+  draw(g){
+    const c = (this.age*6)%1 < 0.5 ? COLORS[2] : COLORS[3];
+    g.fillStyle = c; g.fillRect(this.x|0, this.y|0, 1,1);
+  }
+}
+
+class Spore {
+  constructor(x,y){ this.x=x; this.y=y; this.vx=0; this.vy=0; this.age=0; this.settled=false; this.fail=false; }
+  update(dt,time){
+    if(this.settled||this.fail) return;
+    const f = flowAt(this.x,this.y,time*0.5);
+    this.vx += f.vx*0.4 + (Math.random()-0.5)*0.03;
+    this.vy += f.vy*0.4 + (Math.random()-0.5)*0.03;
+    this.vx *= 0.95; this.vy *= 0.95;
+    this.x += this.vx; this.y += this.vy;
+    this.age += dt;
+    // settle if near rock in suitable depth band
+    const wl = waterline(time);
+    const goodDepth = this.y>wl-10 && this.y<wl+40; // intertidal to shallow
+    if(goodDepth && isRock(this.x|0, this.y|0)){
+      this.settled = true;
+      return;
+    }
+    if(this.x<1||this.x>MAP.W-2||this.y<1||this.y>MAP.H-2||this.age>30){ this.fail=true; }
+  }
+  draw(g){
+    const c = this.settled? COLORS[2] : (this.fail? COLORS[1] : COLORS[3]);
+    g.fillStyle = c; g.fillRect(this.x|0, this.y|0, 1,1);
+  }
+}
+
+class Anemone {
+  constructor(x,y){
+    this.x=x; this.y=y; this.energy=4; this.alive=true; this.age=0; this.focus=false;
+    this.tent = {len:6, angle: -Math.PI/2, extend:0, cooldown:0};
+    this.spawnCooldown=0; // seconds
+  }
+  update(dt,time){
+    if(!this.alive) return;
+    this.age += dt;
+    // passive feeding if plankton touches mouth
+    const mouthR = 3;
+    for(const p of WORLD.plankton){
+      if(!p.caught){
+        const dx = p.x - this.x, dy = p.y - this.y;
+        const d2 = dx*dx+dy*dy;
+        if(d2 < mouthR*mouthR){ p.caught=true; this.energy += 0.3; }
+      }
+    }
+    // active tentacle control (focus only)
+    if(this.focus){
+      const dx = (MOUSE.x - this.x); const dy = (MOUSE.y - this.y);
+      this.tent.angle = Math.atan2(dy,dx);
+      if(MOUSE.down){
+        const cost = 0.7*dt;
+        if(this.energy>cost){
+          this.energy -= cost;
+          this.tent.extend = Math.min(1, this.tent.extend + dt*1.8);
+        }
+      } else {
+        this.tent.extend = Math.max(0, this.tent.extend - dt*1.2);
+      }
+    } else {
+      // idle breathing
+      this.tent.extend *= 0.98;
+    }
+
+    // tentacle capture sweep
+    if(this.tent.extend>0){
+      const L = 8 + this.tent.extend*18;
+      const a = this.tent.angle;
+      const tipx = this.x + Math.cos(a)*L;
+      const tipy = this.y + Math.sin(a)*L;
+      for(const p of WORLD.plankton){
+        if(!p.caught){
+          const dx = p.x - tipx, dy = p.y - tipy;
+          if(dx*dx+dy*dy < 6){ p.caught=true; this.energy += 0.25; }
+        }
+      }
+    }
+
+    // digest caught plankton near
+    for(const p of WORLD.plankton){ if(p.caught){ p.energy -= dt; if(p.energy<=0){ p.reset(); } } }
+
+    // Starvation if emersed too long
+    const wl = waterline(time);
+    const submerged = this.y > wl-1; // below line -> underwater
+    if(!submerged){ this.energy -= dt*0.15; }
+    if(this.energy<=0){ this.alive=false; this.energy=0; }
+
+    // natural gain small
+    if(submerged) this.energy += dt*0.05;
+    this.energy = Math.min(this.energy, 12);
+
+    // spawn cooldown
+    if(this.spawnCooldown>0) this.spawnCooldown -= dt;
+  }
+  trySpawn(){
+    if(this.spawnCooldown>0) return 0;
+    if(this.energy<6) return 0;
+    const n = 12 + Math.floor((this.energy-6)*4);
+    this.energy -= 4;
+    this.spawnCooldown = 10; // seconds
+    // release spores cloud
+    for(let i=0;i<n;i++){
+      const ang = Math.random()*Math.PI*2;
+      const r = 2 + Math.random()*4;
+      const s = new Spore(this.x + Math.cos(ang)*r, this.y + Math.sin(ang)*r);
+      WORLD.spores.push(s);
+    }
+    return n;
+  }
+  draw(g,time){
+    // base body
+    const submerged = this.y > waterline(time)-1;
+    const colBody = submerged ? COLORS[1] : COLORS[0];
+    g.fillStyle = colBody; g.fillRect((this.x-1)|0, (this.y-1)|0, 3, 2);
+    // oral disc
+    g.fillStyle = COLORS[2]; g.fillRect((this.x-1)|0, (this.y-2)|0, 3, 1);
+    // tentacle
+    if(this.tent.extend>0){
+      const L = 8 + this.tent.extend*18;
+      const a = this.tent.angle;
+      const steps = Math.max(6, (L|0));
+      g.fillStyle = COLORS[3];
+      let px = this.x, py = this.y-1;
+      for(let i=1;i<=steps;i++){
+        const f = i/steps;
+        const tx = this.x + Math.cos(a)*L*f + Math.sin(a*2+f*4)*0.3;
+        const ty = this.y + Math.sin(a)*L*f + Math.cos(a*2+f*3)*0.3;
+        const ix = tx|0, iy = ty|0;
+        g.fillRect(ix, iy, 1,1);
+        if(i%5===0){ g.fillRect(ix+1, iy, 1,1); }
+        px=tx; py=ty;
+      }
+    }
+    // focus marker
+    if(this.focus){ g.fillStyle = COLORS[3]; g.fillRect((this.x-2)|0,(this.y-4)|0,5,1); g.fillRect((this.x-2)|0,(this.y+1)|0,5,1); }
+  }
+}
+
+const WORLD = {
+  anems: [],
+  plankton: [],
+  spores: [],
+  fish: [],
+  focusIndex: 0,
+  help:false,
+  showFlow:false,
+  metric:{caught:0},
+};
+
+function seedWorld(){
+  WORLD.anems.length=0; WORLD.plankton.length=0; WORLD.spores.length=0; WORLD.fish.length=0; WORLD.focusIndex=0;
+  // place starter anemone on a rock near center-lower
+  let placed=false; let attempts=0;
+  while(!placed && attempts<2000){
+    const x = 40 + Math.floor(Math.random()*80);
+    const y = 70 + Math.floor(Math.random()*60);
+    if(isRock(x,y)) { WORLD.anems.push(new Anemone(x,y)); placed=true; }
+    attempts++;
+  }
+  if(!placed){ WORLD.anems.push(new Anemone(80, 120)); }
+  WORLD.anems[0].focus=true;
+
+  // plankton cloud
+  for(let i=0;i<220;i++){
+    const p = new Plankton(Math.random()*MAP.W, Math.random()*MAP.H);
+    if(Math.random()<0.5) p.reset();
+    WORLD.plankton.push(p);
+  }
+}
+
+/********* AUDIO (ambient surf) *********/
+let audioCtx = null, noiseNode = null, filter = null, gain = null;
+function initAudio(){
+  if(audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const bufferSize = 2 * audioCtx.sampleRate;
+  const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const output = noiseBuffer.getChannelData(0);
+  for(let i=0; i<bufferSize; i++){
+    output[i] = (Math.random()*2-1) * 0.4;
+  }
+  noiseNode = audioCtx.createBufferSource();
+  noiseNode.buffer = noiseBuffer; noiseNode.loop = true;
+  filter = audioCtx.createBiquadFilter(); filter.type='lowpass'; filter.frequency.value=600;
+  gain = audioCtx.createGain(); gain.gain.value=0.0; // start muted until user toggles
+  noiseNode.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+  noiseNode.start();
+}
+let audioOn = false;
+function toggleAudio(){ initAudio(); audioOn = !audioOn; if(gain) gain.gain.setTargetAtTime(audioOn? 0.07 : 0.0, audioCtx.currentTime, 0.25); }
+function userInteract(){ if(!audioCtx) initAudio(); }
+
+/********* RENDER *********/
+function drawBackground(g, time){
+  const wl = waterline(time);
+  // sky
+  g.fillStyle = COLORS[3]; g.fillRect(0,0,MAP.W,MAP.H);
+  // water body (dither stripes)
+  for(let y=0;y<MAP.H;y++){
+    const inWater = y>wl;
+    if(inWater){
+      const row = y|0; const shade = (row%3===0)? COLORS[1] : COLORS[2];
+      g.fillStyle = shade; g.fillRect(0,row, MAP.W, 1);
+    }
+  }
+  // waves line
+  for(let x=0;x<MAP.W;x++){
+    const y = wl + Math.sin((x*0.2)+time*2)*0.6;
+    g.fillStyle = COLORS[2]; g.fillRect(x, y|0, 1,1);
+  }
+  // rocks & sand
+  for(let y=0;y<MAP.H;y++){
+    for(let x=0;x<MAP.W;x++){
+      if(isRock(x,y)){
+        const above = !isRock(x, y-1);
+        g.fillStyle = above? COLORS[0] : COLORS[1];
+        g.fillRect(x,y,1,1);
+      }
+    }
+  }
+}
+
+function drawFlow(g,time){
+  if(!WORLD.showFlow) return;
+  g.strokeStyle = COLORS[0];
+  for(let y=8;y<MAP.H;y+=12){
+    for(let x=8;x<MAP.W;x+=12){
+      const f = flowAt(x,y,time*0.4);
+      const tx = x + f.vx*10; const ty = y + f.vy*10;
+      g.fillStyle = COLORS[0];
+      g.fillRect(x|0,y|0,1,1);
+      g.fillRect(tx|0,ty|0,1,1);
+    }
+  }
+}
+
+function drawUI(g,time){
+  const wl = waterline(time);
+  const focused = WORLD.anems[WORLD.focusIndex];
+  // HUD box
+  g.fillStyle = COLORS[0]; g.fillRect(2,2, 96,26);
+  g.fillStyle = COLORS[3]; g.fillRect(3,3, 94,24);
+  g.fillStyle = COLORS[0];
+  const txt = (s, x, y)=>{ g.fillText(s, x, y); };
+  g.font = '6px monospace'; g.textBaseline='top';
+  txt(`Tide:${(wl|0)}  Anems:${WORLD.anems.length}`, 5,5);
+  txt(`Energy:${focused?focused.energy.toFixed(1):'-'}  Spores:${WORLD.spores.length}`, 5,12);
+  txt(`H=help  M=amb  S=spawn  Tab=switch`, 5,19);
+
+  if(WORLD.help){
+    // help card
+    const W=130,H=56; const X=MAP.W-W-4, Y=4;
+    g.fillStyle = COLORS[0]; g.fillRect(X,Y,W,H);
+    g.fillStyle = COLORS[3]; g.fillRect(X+1,Y+1,W-2,H-2);
+    g.fillStyle = COLORS[0]; g.font='6px monospace';
+    let yy=Y+4; const line=(s)=>{ g.fillText(s,X+4,yy); yy+=7; };
+    line('Controls:');
+    line('• Click/Hold — extend tentacles');
+    line('• Mouse — aim');
+    line('• S — spawn spores (needs energy)');
+    line('• Tab — switch anemone');
+    line('• M — ambience on/off');
+    line('• P — pause; R — reset');
+    line('• 1/2/3 — resolution');
+  }
+}
+
+/********* SIM LOOP *********/
+let started = false;
+function startGame(){
+  started = true; seedWorld();
+  cancelAnimationFrame(frameId);
+  lastRAF = performance.now();
+  loop(lastRAF);
+}
+
+let accumulator = 0, lastRAF = 0;
+function loop(now){
+  frameId = requestAnimationFrame(loop);
+  const elapsed = (now - lastRAF)/1000; lastRAF = now;
+  if(!paused){
+    accumulator += Math.min(elapsed, 0.1);
+    while(accumulator >= dt){
+      step(dt);
+      t += dt; accumulator -= dt;
+    }
+  }
+  render();
+  MOUSE.clicked=false;
+}
+
+function step(dt){
+  // input hotkeys
+  if(KEYS['h']){ WORLD.help = !WORLD.help; KEYS['h']=false; }
+  if(KEYS['m']){ toggleAudio(); KEYS['m']=false; }
+  if(KEYS['p']){ paused = !paused; KEYS['p']=false; }
+  if(KEYS['r']){ seedWorld(); KEYS['r']=false; }
+  if(KEYS['f']){ WORLD.showFlow = !WORLD.showFlow; KEYS['f']=false; }
+  if(KEYS['tab']){
+    WORLD.anems[WORLD.focusIndex].focus=false;
+    WORLD.focusIndex = (WORLD.focusIndex+1)%WORLD.anems.length;
+    WORLD.anems[WORLD.focusIndex].focus=true; KEYS['tab']=false;
+  }
+  if(KEYS['1']){ BASE_W=GB.W; BASE_H=GB.H; fit(); KEYS['1']=false; }
+  if(KEYS['2']){ BASE_W=Math.floor(GB.W*1.5); BASE_H=Math.floor(GB.H*1.5); fit(); KEYS['2']=false; }
+  if(KEYS['3']){ BASE_W=GB.W*2; BASE_H=GB.H*2; fit(); KEYS['3']=false; }
+
+  // try spawn
+  if(KEYS['s']){ const a = WORLD.anems[WORLD.focusIndex]; const n=a.trySpawn(); if(n>0){ /* ok */ } KEYS['s']=false; }
+
+  // update entities
+  for(const p of WORLD.plankton) p.update(dt, t);
+  for(const s of WORLD.spores){ s.update(dt,t); if(s.settled){
+      // verify rock and spacing
+      const nx = Math.max(2, Math.min(MAP.W-3, s.x|0));
+      const ny = Math.max(2, Math.min(MAP.H-3, s.y|0));
+      let ok = isRock(nx,ny);
+      if(ok){
+        for(const a of WORLD.anems){ const dx=a.x-nx, dy=a.y-ny; if(dx*dx+dy*dy<100){ ok=false; break; } }
+      }
+      if(ok){ const a = new Anemone(nx,ny); WORLD.anems.push(a); }
+      s.fail=true; s.settled=false; // consume spore
+    } }
+  for(const a of WORLD.anems) a.update(dt,t);
+}
+
+function render(){
+  const g = octx;
+  g.imageSmoothingEnabled = false;
+  drawBackground(g, t);
+
+  // draw spores and plankton
+  for(const s of WORLD.spores) s.draw(g);
+  for(const p of WORLD.plankton) p.draw(g);
+
+  // draw anemones on top
+  for(const a of WORLD.anems) a.draw(g,t);
+
+  drawFlow(g,t);
+  drawUI(g,t);
+
+  // blit to screen
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(off, 0,0, off.width*scale, off.height*scale);
+}
+
+})();
+</script>
+</body>
+</html>
